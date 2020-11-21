@@ -13,33 +13,33 @@ pub struct ElfParser<R> {
 #[derive(Debug)]
 pub struct Header {
     /// This byte is set to either 1 or 2 to signify 32- or 64-bit format, respectively
-    class: Class,
+    pub class: Class,
     /// The endianness of the file
-    endianness: Endianness,
+    pub endianness: Endianness,
     /// The ELF file version
-    version: u8,
+    pub version: u8,
     /// The target OS ABI
-    os_abi: u8,
+    pub os_abi: u8,
     /// The target OS ABI version
-    os_abi_version: u8,
+    pub os_abi_version: u8,
     /// The object file type
-    file_type: u16,
+    pub file_type: u16,
     /// The program entry address
-    entry_addr: u32,
+    pub entry_addr: u32,
     /// The program header offset
-    ph_offset: u32,
+    pub ph_offset: u32,
     /// The section header offset
-    sh_offset: u32,
+    pub sh_offset: u32,
     /// The size of a program header entry
-    ph_entry_size: u16,
+    pub ph_entry_size: u16,
     /// The number of program header entries
-    ph_entry_num: u16,
+    pub ph_entry_num: u16,
     /// The size of a section header entry
-    sh_entry_size: u16,
+    pub sh_entry_size: u16,
     /// The number of section header entries
-    sh_entry_num: u16,
+    pub sh_entry_num: u16,
     /// The index of the section header that contains the names for the sections
-    sh_str_idx: u16,
+    pub sh_str_idx: u16,
 }
 
 /// ELF32 Program Header
@@ -93,11 +93,13 @@ pub struct SectionHeader {
     entry_size: u32,
 }
 
+/// The target machine class
 #[derive(Debug)]
 pub enum Class {
     Elf32,
 }
 
+/// Indicates the elf and target endianness
 #[derive(Debug)]
 pub enum Endianness {
     Little,
@@ -129,19 +131,82 @@ pub enum ParseError {
 }
 
 impl<R: Read + Seek> ElfParser<R> {
+    /// Wraps a type that is `Read` and `Seek` into an `ElfParser`
     pub fn new(reader: R) -> ElfParser<R> {
         let reader = BufReader::new(reader);
 
         ElfParser { reader }
     }
 
-    pub fn parse_header(&mut self) -> Result<Header, ParseError> {
-        // Seek to the beginning of the file
-        self.reader.seek(SeekFrom::Start(0))?;
+    /// Parses and returns the Program Header at the given `offset` from the beginning of the input
+    pub fn parse_program_header(&mut self, offset: u64) -> Result<ProgramHeader, ParseError> {
+        self.reader.seek(SeekFrom::Start(offset))?;
 
+        let mut buffer = [0u8; 32];
+
+        self.reader.read_exact(&mut buffer)?;
+
+        let typ = u32::from_le_bytes(buffer[0x00..0x04].try_into().unwrap());
+        let offset = u32::from_le_bytes(buffer[0x04..0x08].try_into().unwrap());
+        let virt_addr = u32::from_le_bytes(buffer[0x08..0x0c].try_into().unwrap());
+        let phys_addr = u32::from_le_bytes(buffer[0x0c..0x10].try_into().unwrap());
+        let file_size = u32::from_le_bytes(buffer[0x10..0x14].try_into().unwrap());
+        let mem_size = u32::from_le_bytes(buffer[0x14..0x18].try_into().unwrap());
+        let flags = u32::from_le_bytes(buffer[0x18..0x1c].try_into().unwrap());
+        let alignment = u32::from_le_bytes(buffer[0x1c..0x20].try_into().unwrap());
+
+        Ok(ProgramHeader {
+            typ,
+            offset,
+            virt_addr,
+            phys_addr,
+            file_size,
+            mem_size,
+            flags,
+            alignment,
+        })
+    }
+
+    /// Parses and returns the section header at `offset`
+    pub fn parse_section_header(&mut self, offset: u64) -> Result<SectionHeader, ParseError> {
+        self.reader.seek(SeekFrom::Start(offset))?;
+
+        let mut buffer = [0u8; 40];
+
+        self.reader.read_exact(&mut buffer)?;
+
+        let name_offset = u32::from_le_bytes(buffer[0x00..0x04].try_into().unwrap());
+        let typ = u32::from_le_bytes(buffer[0x04..0x08].try_into().unwrap());
+        let flags = u32::from_le_bytes(buffer[0x08..0x0c].try_into().unwrap());
+        let virt_addr = u32::from_le_bytes(buffer[0x0c..0x10].try_into().unwrap());
+        let offset = u32::from_le_bytes(buffer[0x10..0x14].try_into().unwrap());
+        let size = u32::from_le_bytes(buffer[0x14..0x18].try_into().unwrap());
+        let link = u32::from_le_bytes(buffer[0x18..0x1c].try_into().unwrap());
+        let info = u32::from_le_bytes(buffer[0x1c..0x20].try_into().unwrap());
+        let addr_align = u32::from_le_bytes(buffer[0x20..0x24].try_into().unwrap());
+        let entry_size = u32::from_le_bytes(buffer[0x24..0x28].try_into().unwrap());
+
+        Ok(SectionHeader {
+            name_offset,
+            typ,
+            flags,
+            virt_addr,
+            offset,
+            size,
+            link,
+            info,
+            addr_align,
+            entry_size,
+        })
+    }
+
+    /// Parses and returns an ELF32 file header at the current position of the reader
+    ///
+    /// Note: It is up to the user to ensure that the reader is at the beginning of the input
+    pub fn parse_header(&mut self) -> Result<Header, ParseError> {
+        // Read the first 64 bytes of the input into the `header` buffer
         let mut header = [0u8; 64];
 
-        // Read the first 64 bytes of the input into the `header` buffer
         self.reader
             .read_exact(&mut header)
             .map_err(|_| ParseError::MissingHeader)?;

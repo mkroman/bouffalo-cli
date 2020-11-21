@@ -20,6 +20,26 @@ fn elf2image<P: AsRef<Path>>(input_path: P) -> Result<(), anyhow::Error> {
 
     println!("ELF header: {:?}", header);
 
+    // Read the program headers
+    println!("Program headers:");
+
+    for n in 0..header.ph_entry_num {
+        let off = header.ph_offset as u64 + (0x20 * n as u64);
+
+        let program_header = parser.parse_program_header(off)?;
+
+        println!("{:#x} {:?}", off, program_header);
+    }
+
+    println!("Section headers:");
+
+    for n in 0..header.sh_entry_num {
+        let off = header.sh_offset as u64 + (0x28 * n as u64);
+        let section_header = parser.parse_section_header(off)?;
+
+        println!("{:#x} {:?}", off, section_header);
+    }
+
     Ok(())
 }
 
