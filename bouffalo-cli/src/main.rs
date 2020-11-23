@@ -4,9 +4,11 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::Context;
+use structopt::StructOpt;
 
 mod bl;
 mod bl60x;
+mod cli;
 mod elf_parser;
 mod error;
 
@@ -75,20 +77,15 @@ fn main() -> Result<(), anyhow::Error> {
     // Create a logger with a timestamp that logs everything at Info level or above
     pretty_env_logger::init_timed();
 
-    let args: Vec<String> = std::env::args().collect();
+    // Parse the command-line arguments
+    let opts = cli::Opts::from_args();
 
-    match args[1].as_str() {
-        "elf2image" => {
-            println!("elf2image {}", args[2]);
+    match &opts.command {
+        cli::Command::Info => {
+            let serial_port = opts.serial_port;
 
-            let _image = elf2image(&args[2])?;
+            get_info(&serial_port)?;
         }
-        "info" => {
-            let port = args.get(2).map(|s| s.as_str()).unwrap_or("/dev/ttyUSB0");
-
-            get_info(port)?;
-        }
-        _ => println!("Usage: {} elf2image <file.elf>", args[0]),
     }
 
     Ok(())
