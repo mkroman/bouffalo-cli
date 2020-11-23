@@ -3,6 +3,7 @@ use std::ffi::OsStr;
 use std::io::{self, Read, Write};
 use std::time::Duration;
 
+use log::debug;
 use serial::{SerialPort, SystemPort};
 use thiserror::Error;
 
@@ -19,13 +20,53 @@ pub struct Bl60xSerialPort {
     port: SystemPort,
 }
 
+pub trait SerialWritableCommand {
+    fn write_cmd_to_buf(&self, buf: &mut Vec<u8>) -> Result<(), IspError>;
+}
+
+/// Command to request the BootROM information
+pub struct GetBootInfo;
+
+impl SerialWritableCommand for GetBootInfo {
+    fn write_cmd_to_buf(&self, buf: &mut Vec<u8>) -> Result<(), IspError> {
+        buf.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]);
+
+        Ok(())
+    }
+}
+
+/// Command that will load the given bootheader onto the device
+pub struct LoadBootHeader {
+    pub bootheader: [u8; 176],
+}
+
+impl SerialWritableCommand for LoadBootHeader {
+    fn write_cmd_to_buf(&self, buf: &mut Vec<u8>) -> Result<(), IspError> {
+        let mut tmp = [0u8; 4];
+
+        // Set the command id
+        tmp[0] = 0x11;
+
+        // Set the boot header length
+        tmp[0x2..0x4].copy_from_slice(&(self.bootheader.len() as u16).to_le_bytes());
+
+        // Copy the command id and boot header length into the output buffer
+        buf.extend_from_slice(&tmp);
+
+        // Copy the bootheader itself
+        buf[0x4..].copy_from_slice(&self.bootheader);
+
+        Ok(())
+    }
+}
+
 /// The boot info returned from the device when requested
 #[derive(Debug, Clone, Copy)]
 pub struct BootInfo {
     /// The version of the boot ROM
-    bootrom_version: u32,
+    pub rom_version: u32,
     /// OTP information - ??
-    otp_info: [u8; 16],
+    pub otp_info: [u8; 16],
 }
 
 #[derive(Error, Debug)]
@@ -36,35 +77,20 @@ pub enum IspError {
     IoError(#[from] io::Error),
 }
 
-/// Commands that can be sent to the device in UART mode
-pub enum Command<'a> {
-    /// Fetches the BootROM info
-    GetBootInfo,
-    /// Loads the given boot header to the device
-    LoadBootHeader(&'a [u8; 176]),
-    /// Loads the given public key to the device
-    LoadPublicKey(&'a [u8; 68]),
-    /// Loads the given signature to the device
-    LoadSignature(&'a [u8]),
-    LoadAesIv(&'a [u8]),
-    LoadSegmentHeader {
-        dest_addr: u32,
-        len: u32,
-        crc: u32,
-    },
-    LoadSegmentData(&'a [u8]),
-    CheckImage,
-    RunImage,
-}
-
 impl Bl60xSerialPort {
     /// Opens the given `port` and configures it to use the communication settings expected by the
     /// BL60x bootrom
     pub fn open<T: AsRef<OsStr> + ?Sized>(port: &T) -> Result<Bl60xSerialPort, serial::Error> {
-        let mut port = serial::open(port)?;
+        debug!("Opening serial port {:?}", port.as_ref());
 
-        port.configure(&BL602_BOOTROM_SERIAL_SETTINGS)?;
-        port.set_timeout(Duration::from_millis(2000))?;
+        let mut port = serial::open(port)?;
+        let settings = BL602_BOOTROM_SERIAL_SETTINGS;
+        let timeout = Duration::from_millis(2000);
+
+        debug!("Setting baud rate to {}", settings.baud_rate.speed());
+        port.configure(&settings)?;
+        debug!("Setting timeout to {:?}", timeout);
+        port.set_timeout(timeout)?;
 
         Ok(Bl60xSerialPort { port })
     }
@@ -84,22 +110,32 @@ impl Bl60xSerialPort {
         Ok(())
     }
 
+    /// Sends the given `command` to the device and returns `()` if it was sent successfully,
+    /// without reading the response
+    pub fn send_command<T: Into<Box<impl SerialWritableCommand>>>(
+        &mut self,
+        command: T,
+    ) -> Result<(), IspError> {
+        let mut buf: Vec<u8> = Vec::with_capacity(4096);
+
+        command.into().write_cmd_to_buf(&mut buf)?;
+        self.port.write(&buf)?;
+
+        Ok(())
+    }
+
     /// Requests boot info from the BootROM
     pub fn get_boot_info(&mut self) -> Result<BootInfo, IspError> {
         let mut buf = [0u8; 24];
 
-        self.port.write(&[0x10, 0x00, 0x00, 0x00])?;
+        self.send_command(GetBootInfo)?;
         let _ = self.port.read(&mut buf)?;
 
-        let bootrom_version = u32::from_le_bytes(buf[0x4..0x8].try_into().unwrap());
+        let rom_version = u32::from_le_bytes(buf[0x4..0x8].try_into().unwrap());
         let otp_info = buf[0x8..0x18].try_into().unwrap();
 
-        for (i, b) in buf[0x8..0x18].iter().enumerate() {
-            println!("otp[{:2}]: {:08b}", i, b);
-        }
-
         Ok(BootInfo {
-            bootrom_version,
+            rom_version,
             otp_info,
         })
     }

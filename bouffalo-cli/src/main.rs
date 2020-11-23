@@ -14,6 +14,8 @@ use bl::Firmware;
 pub use error::Error;
 
 fn get_info(port: &str) -> Result<(), anyhow::Error> {
+    println!("Using serial device {:?}", port);
+
     // Open a serial port to the blx602 device
     let mut port = bl60x::Bl60xSerialPort::open(port)?;
 
@@ -26,7 +28,25 @@ fn get_info(port: &str) -> Result<(), anyhow::Error> {
     // Send get_boot_info command
     let boot_info = port.get_boot_info()?;
 
-    println!("Boot info: {:#?}", boot_info);
+    println!("BootROM version: {}", boot_info.rom_version);
+    println!("OTP flags:");
+
+    // Print the individual bits of the OTP flags over multiple lines
+    let otp_bit_strs: Vec<String> = boot_info
+        .otp_info
+        .iter()
+        .map(|x| format!("{:08b}", x))
+        .collect();
+
+    for row in 0..otp_bit_strs.len() / 4 {
+        println!(
+            "  {} {} {} {}",
+            otp_bit_strs[0 + row * 4],
+            otp_bit_strs[1 + row * 4],
+            otp_bit_strs[2 + row * 4],
+            otp_bit_strs[3 + row * 4]
+        );
+    }
 
     Ok(())
 }
@@ -52,6 +72,9 @@ fn elf2image<P: AsRef<Path>>(input_path: P) -> Result<(), anyhow::Error> {
 }
 
 fn main() -> Result<(), anyhow::Error> {
+    // Create a logger with a timestamp that logs everything at Info level or above
+    pretty_env_logger::init_timed();
+
     let args: Vec<String> = std::env::args().collect();
 
     match args[1].as_str() {
