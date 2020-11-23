@@ -1,5 +1,6 @@
 use std::convert::TryInto;
-use std::io::{self, BufReader, Read, Seek, SeekFrom};
+use std::fmt;
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 
 use thiserror::Error;
 
@@ -7,6 +8,124 @@ use thiserror::Error;
 #[derive(Debug)]
 pub struct ElfParser<R> {
     reader: BufReader<R>,
+    header: Header,
+    program_headers: Vec<ProgramHeader>,
+    section_headers: Vec<SectionHeader>,
+}
+
+#[repr(u32)]
+#[derive(Debug, Copy, Clone)]
+pub enum ProgType {
+    Null = 0x0,
+    Load,
+    Dynamic,
+    Interp,
+    Note,
+    ShLib,
+    PHdr,
+    Tls,
+    GnuEhFrame = 0x6474e550,
+    GnuStack = 0x6474e551,
+    GnuRelRo = 0x6474e552,
+}
+
+impl From<u32> for ProgType {
+    fn from(val: u32) -> ProgType {
+        match val {
+            0 => ProgType::Null,
+            1 => ProgType::Load,
+            2 => ProgType::Dynamic,
+            3 => ProgType::Interp,
+            4 => ProgType::Note,
+            5 => ProgType::ShLib,
+            6 => ProgType::PHdr,
+            7 => ProgType::Tls,
+            0x6474e550 => ProgType::GnuEhFrame,
+            0x6474e551 => ProgType::GnuStack,
+            0x6474e552 => ProgType::GnuRelRo,
+            _ => ProgType::Null,
+        }
+    }
+}
+
+#[repr(u32)]
+#[derive(Copy, Clone)]
+pub enum SectionType {
+    Null = 0x0,
+    ProgBits,
+    SymTab,
+    StrTab,
+    RelA,
+    Hash,
+    Dynamic,
+    Note,
+    NoBits,
+    Rel,
+    ShLib,
+    DynSym,
+    InitArray = 0xe,
+    FiniArray = 0xf,
+    PreInitArray,
+    Group,
+    SymTabShNdx,
+    Num,
+    // Sometimes called ARM_ATTRIBUTES, other times RISCV_ATTRIBUTES
+    CompatAttribute = 0x70000003,
+}
+
+impl From<u32> for SectionType {
+    fn from(val: u32) -> SectionType {
+        match val {
+            0x00 => SectionType::Null,
+            0x01 => SectionType::ProgBits,
+            0x02 => SectionType::SymTab,
+            0x03 => SectionType::StrTab,
+            0x04 => SectionType::RelA,
+            0x05 => SectionType::Hash,
+            0x06 => SectionType::Dynamic,
+            0x07 => SectionType::Note,
+            0x08 => SectionType::NoBits,
+            0x09 => SectionType::Rel,
+            0x0a => SectionType::ShLib,
+            0x0b => SectionType::DynSym,
+            0x0e => SectionType::InitArray,
+            0x0f => SectionType::FiniArray,
+            0x10 => SectionType::PreInitArray,
+            0x11 => SectionType::Group,
+            0x12 => SectionType::SymTabShNdx,
+            0x13 => SectionType::Num,
+            0x70000003 => SectionType::CompatAttribute,
+            _ => panic!("Unrecognized section type {:#x}", val),
+        }
+    }
+}
+
+impl fmt::Debug for SectionType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            SectionType::Null => "NULL",
+            SectionType::ProgBits => "PROGBITS",
+            SectionType::SymTab => "SYMTAB",
+            SectionType::StrTab => "STRTAB",
+            SectionType::RelA => "RELA",
+            SectionType::Hash => "HASH",
+            SectionType::Dynamic => "DYNAMIC",
+            SectionType::Note => "NOTE",
+            SectionType::NoBits => "NOBITS",
+            SectionType::Rel => "REL",
+            SectionType::ShLib => "SHLIB",
+            SectionType::DynSym => "DYNSYM",
+            SectionType::InitArray => "INIT_ARRAY",
+            SectionType::FiniArray => "FINI_ARRAY",
+            SectionType::PreInitArray => "PREINIT_ARRAY",
+            SectionType::Group => "GROUP",
+            SectionType::SymTabShNdx => "SYMTAB_SHNDX",
+            SectionType::Num => "NUM",
+            SectionType::CompatAttribute => "RISCV_ATTRIBUTE",
+        };
+
+        write!(f, "{}", s)
+    }
 }
 
 /// This is an ELF32 header
@@ -46,7 +165,7 @@ pub struct Header {
 #[derive(Debug)]
 pub struct ProgramHeader {
     /// The type of the program header segment
-    typ: u32,
+    typ: ProgType,
     /// The offset to the segment in the image file
     offset: u32,
     /// The virtual address to map the segment to
@@ -72,25 +191,27 @@ pub struct ProgramHeader {
 #[derive(Debug)]
 pub struct SectionHeader {
     /// Offset to a string in the .shstrtab section with the name of this section
-    name_offset: u32,
+    pub name_offset: u32,
     /// The type of this section
-    typ: u32,
+    pub typ: SectionType,
     /// The attributes of this section
-    flags: u32,
+    pub flags: u32,
     /// Virtual address for this section, if it's to be loaded into memory
-    virt_addr: u32,
+    pub virt_addr: u32,
     /// Offset to the section in the file image
-    offset: u32,
+    pub offset: u32,
     /// The size of the section in the file image, in bytes
-    size: u32,
+    pub size: u32,
     /// Contains the index of an associated section, which might be used depending on the type
-    link: u32,
+    pub link: u32,
     /// Contains information about the section
-    info: u32,
+    pub info: u32,
     /// The required alignment of the section
-    addr_align: u32,
+    pub addr_align: u32,
     /// The size of each entry, in bytes, if this is a section with fixed sized data
-    entry_size: u32,
+    pub entry_size: u32,
+    /// The name of the section
+    pub name: Option<String>,
 }
 
 /// The target machine class
@@ -124,27 +245,67 @@ pub enum ParseError {
     UnsupportedMachineType,
     #[error("Input is an unsupported file type, only executable files are supported")]
     UnsupportedFileType,
-    #[error("There was an internal error when converting fields")]
-    ConversionError,
+    #[error("There was an error when trying to parse the section name as utf-8")]
+    SectionNameEncodingError(#[from] std::string::FromUtf8Error),
     #[error("I/O error: {}", _0)]
     IoError(#[from] io::Error),
 }
 
 impl<R: Read + Seek> ElfParser<R> {
-    /// Wraps a type that is `Read` and `Seek` into an `ElfParser`
-    pub fn new(reader: R) -> ElfParser<R> {
-        let reader = BufReader::new(reader);
+    /// Parses ELF file-, program- and section headers from the given `reader` input and returns an
+    /// `ElfParser` that retains ownership in order to read further section data
+    pub fn parse(reader: R) -> Result<ElfParser<R>, ParseError> {
+        let mut reader = BufReader::new(reader);
+        let header = Self::parse_header(&mut reader)?;
+        let mut program_headers = Vec::with_capacity(header.ph_entry_num as usize);
+        let mut section_headers = Vec::with_capacity(header.sh_entry_num as usize);
 
-        ElfParser { reader }
+        // Read the program headers
+        for n in 0..header.ph_entry_num {
+            let offset = header.ph_offset as u64 + (header.ph_entry_size as u64 * n as u64);
+            let program_header = Self::parse_program_header(&mut reader, offset)?;
+
+            program_headers.push(program_header);
+        }
+
+        // Read the section headers
+        for n in 0..header.sh_entry_num {
+            let offset = header.sh_offset as u64 + (header.sh_entry_size as u64 * n as u64);
+            let section_header = Self::parse_section_header(&mut reader, offset)?;
+
+            section_headers.push(section_header);
+        }
+
+        let mut strbuf: Vec<u8> = Vec::new();
+        let str_table_offset = section_headers[header.sh_str_idx as usize].offset as u64;
+
+        // Read the section names
+        for sh in section_headers.iter_mut() {
+            strbuf.clear();
+            reader.seek(SeekFrom::Start(str_table_offset + sh.name_offset as u64))?;
+            reader.read_until(0x00, &mut strbuf)?;
+
+            sh.name = Some(String::from_utf8_lossy(&strbuf[..strbuf.len() - 1]).to_string());
+        }
+
+        Ok(ElfParser {
+            reader,
+            header,
+            program_headers,
+            section_headers,
+        })
     }
 
     /// Parses and returns the Program Header at the given `offset` from the beginning of the input
-    pub fn parse_program_header(&mut self, offset: u64) -> Result<ProgramHeader, ParseError> {
-        self.reader.seek(SeekFrom::Start(offset))?;
+    fn parse_program_header(
+        reader: &mut BufReader<R>,
+        offset: u64,
+    ) -> Result<ProgramHeader, ParseError> {
+        reader.seek(SeekFrom::Start(offset))?;
 
         let mut buffer = [0u8; 32];
 
-        self.reader.read_exact(&mut buffer)?;
+        reader.read_exact(&mut buffer)?;
 
         let typ = u32::from_le_bytes(buffer[0x00..0x04].try_into().unwrap());
         let offset = u32::from_le_bytes(buffer[0x04..0x08].try_into().unwrap());
@@ -156,7 +317,7 @@ impl<R: Read + Seek> ElfParser<R> {
         let alignment = u32::from_le_bytes(buffer[0x1c..0x20].try_into().unwrap());
 
         Ok(ProgramHeader {
-            typ,
+            typ: typ.into(),
             offset,
             virt_addr,
             phys_addr,
@@ -168,12 +329,15 @@ impl<R: Read + Seek> ElfParser<R> {
     }
 
     /// Parses and returns the section header at `offset`
-    pub fn parse_section_header(&mut self, offset: u64) -> Result<SectionHeader, ParseError> {
-        self.reader.seek(SeekFrom::Start(offset))?;
+    pub fn parse_section_header(
+        reader: &mut BufReader<R>,
+        offset: u64,
+    ) -> Result<SectionHeader, ParseError> {
+        reader.seek(SeekFrom::Start(offset))?;
 
         let mut buffer = [0u8; 40];
 
-        self.reader.read_exact(&mut buffer)?;
+        reader.read_exact(&mut buffer)?;
 
         let name_offset = u32::from_le_bytes(buffer[0x00..0x04].try_into().unwrap());
         let typ = u32::from_le_bytes(buffer[0x04..0x08].try_into().unwrap());
@@ -188,7 +352,7 @@ impl<R: Read + Seek> ElfParser<R> {
 
         Ok(SectionHeader {
             name_offset,
-            typ,
+            typ: typ.into(),
             flags,
             virt_addr,
             offset,
@@ -197,17 +361,18 @@ impl<R: Read + Seek> ElfParser<R> {
             info,
             addr_align,
             entry_size,
+            name: None,
         })
     }
 
     /// Parses and returns an ELF32 file header at the current position of the reader
     ///
     /// Note: It is up to the user to ensure that the reader is at the beginning of the input
-    pub fn parse_header(&mut self) -> Result<Header, ParseError> {
+    fn parse_header(reader: &mut BufReader<R>) -> Result<Header, ParseError> {
         // Read the first 64 bytes of the input into the `header` buffer
         let mut header = [0u8; 64];
 
-        self.reader
+        reader
             .read_exact(&mut header)
             .map_err(|_| ParseError::MissingHeader)?;
 
@@ -246,11 +411,7 @@ impl<R: Read + Seek> ElfParser<R> {
         let os_abi_version = header[0x8];
 
         // Read the object file type
-        let file_type = u16::from_le_bytes(
-            header[0x10..0x12]
-                .try_into()
-                .map_err(|_| ParseError::ConversionError)?,
-        );
+        let file_type = u16::from_le_bytes(header[0x10..0x12].try_into().unwrap());
 
         // Assert that the file type is an executable file
         if file_type != 0x02 {
