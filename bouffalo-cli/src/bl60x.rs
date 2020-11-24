@@ -98,7 +98,6 @@ impl Bl60xSerialPort {
     /// Makes the BootROM enter UART mode, returns `()` on success, `IspError` otherwise
     pub fn enter_uart_mode(&mut self) -> Result<(), IspError> {
         let mut buf = [0u8; 2];
-
         let _ = self.port.write(&[0x55, 0x55, 0x55])?;
 
         self.port.read(&mut buf)?;
@@ -126,9 +125,9 @@ impl Bl60xSerialPort {
 
     /// Requests boot info from the BootROM
     pub fn get_boot_info(&mut self) -> Result<BootInfo, IspError> {
-        let mut buf = [0u8; 24];
-
         self.send_command(GetBootInfo)?;
+
+        let mut buf = [0u8; 24];
         let _ = self.port.read(&mut buf)?;
 
         let rom_version = u32::from_le_bytes(buf[0x4..0x8].try_into().unwrap());

@@ -15,7 +15,7 @@ mod error;
 use bl::Firmware;
 pub use error::Error;
 
-fn get_info(port: &str) -> Result<(), anyhow::Error> {
+fn get_boot_info(port: &str) -> Result<(), anyhow::Error> {
     println!("Using serial device {:?}", port);
 
     // Open a serial port to the blx602 device
@@ -84,8 +84,21 @@ fn main() -> Result<(), anyhow::Error> {
         cli::Command::Info => {
             let serial_port = opts.serial_port;
 
-            get_info(&serial_port)?;
+            get_boot_info(&serial_port)?;
         }
+        cli::Command::Flash(cli::FlashCommand::Read(cli::FlashReadOpts {
+            address,
+            size,
+            filename,
+        })) => {
+            println!(
+                "Reading flash at {:#010x} of size {} to file {}",
+                address,
+                size,
+                filename.as_path().display()
+            );
+        }
+        _ => {}
     }
 
     Ok(())
