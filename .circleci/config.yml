@@ -1,0 +1,66 @@
+version: 2.1
+
+jobs:
+  build:
+    docker:
+      - image: cimg/rust:1.48.0
+    steps:
+      - checkout
+      - run:
+          name: Version information
+          command: rustc --version; cargo --version; rustup --version
+      - run:
+          name: Add musl target
+          command: rustup target add x86_64-unknown-linux-musl
+      - run:
+          name: Install musl-gcc
+          command: sudo apt update && sudo apt install -y musl-tools && sudo rm -rf /var/lib/apt/lists/*
+      - run:
+          name: Build
+          command: cargo build --verbose
+      - run:
+          name: Build bouffalo-cli release
+          command: |
+            cd bouffalo-cli
+            cargo build --release --target=x86_64-unknown-linux-musl
+            strip --strip-unneeded target/x86_64-unknown-linux-musl/release/bouffalo-cli
+      - store_artifacts:
+          path: bouffalo-cli/target/x86_64-unknown-linux-musl/release/bouffalo-cli
+          destination: bouffalo-cli
+      - persist_to_workspace:
+          root: bouffalo-cli/target/x86_64-unknown-linux-musl/release
+          paths:
+            - bouffalo-cli
+  publish-github-release:
+    docker:
+      - image: cimg/go:1.15.5
+    steps:
+      - checkout
+      - attach_workspace:
+          at: ./release
+      - run:
+          command: |
+            set -x
+            go get github.com/tcnksm/ghr
+            filename="bouffalo-cli-${CIRCLE_TAG}-x86_64-unknown-linux-musl"
+            mv release/bouffalo-cli "${filename}"
+            gzip "${filename}"
+            ghr -n "bouffalo-cli ${CIRCLE_TAG}" "${CIRCLE_TAG}" "${filename}.gz"
+
+workflows:
+  version: 2.1
+
+  build-and-publish:
+    jobs:
+      - build:
+          filters:
+            tags:
+              only: /.*/
+      - publish-github-release:
+          requires:
+            - build
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v.*/
