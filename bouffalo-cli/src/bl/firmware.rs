@@ -1,5 +1,7 @@
 use std::convert::TryInto;
+use std::io::{self, Seek, SeekFrom};
 
+use byteorder::{LittleEndian, ReadBytesExt};
 use thiserror::Error;
 
 /// The default entry point when the user doesn't provide one when using the `FirmwareBuilder`
@@ -14,10 +16,30 @@ const CLOCK_CONFIG_STRUCT_SIZE: usize = 8;
 /// The size of the boot header structure, excluding the magic header and the crc32
 const BOOT_HEADER_STRUCT_SIZE: usize = 164;
 
+/// Clock config validation errors
+#[derive(Error, Debug)]
+pub enum ClockConfigError {
+    #[error("The magic header value is invalid: {:?}", _0)]
+    InvalidMagicHeader([u8; 4]),
+}
+
+/// Boot header validation errors
+#[derive(Error, Debug)]
+pub enum BootHeaderError {
+    #[error("The magic header value is invalid: {:?}", _0)]
+    InvalidMagicHeader([u8; 4]),
+}
+
 #[derive(Error, Debug)]
 pub enum ParseError {
-    #[error("no error")]
-    None,
+    #[error("Boot header error: {}", _0)]
+    BootHeaderError(#[from] BootHeaderError),
+
+    #[error("Clock config error: {}", _0)]
+    ClockConfigError(#[from] ClockConfigError),
+
+    #[error("I/O error: {}", _0)]
+    IoError(#[from] io::Error),
 }
 
 #[derive(Error, Debug)]
@@ -26,27 +48,39 @@ pub enum BuilderError {
     MissingFlashConfig,
 }
 
-#[repr(C, packed)]
-#[derive(Debug, Clone, Copy)]
+/// Indicates which CPU the firmware is for
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum Cpu {
+    Cpu0,
+    Cpu1,
+}
+
+impl Cpu {
+    /// Converts the CPU to a magic header value as little endian bytes
+    pub fn to_magic_bytes(self) -> [u8; 4] {
+        match self {
+            Cpu::Cpu0 => *b"BFNP",
+            Cpu::Cpu1 => *b"BFAP",
+        }
+    }
+}
+
+impl Default for Cpu {
+    fn default() -> Cpu {
+        Cpu::Cpu0
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
 pub struct Firmware {
-    /// The magic header - either 'BFNP' or 'BFAP'
-    magic: [u8; 4],
+    cpu: Cpu,
     /// The boot header revision?
     revision: u32,
-
     /// The flash configuration magic header
-    flash_magic: [u8; 4],
-    /// The flash configuration parameters
     flash_config: FlashConfig,
-    /// The flash configuration crc32 checksum
-    flash_crc32: u32,
 
-    /// The clock configuration magic header
-    clock_magic: [u8; 4],
     /// The clock configuration parameters
     clock_config: ClockConfig,
-    /// The clock configuration crc32 checksum
-    clock_crc32: u32,
 
     /// Boot configuration flags
     boot_config: u32,
@@ -61,22 +95,18 @@ pub struct Firmware {
     image_start: u32,
 
     /// SHA-256 hash of the whole image
-    hash: [u8; 20],
-
-    // "rsv1" and "rsv2" which are 4 bytes each
-    _reserved: u64,
+    hash: [u8; 32],
 
     /// The CRC32 checksum for the boot header
     crc32: u32,
 }
 
-#[repr(C, packed)]
-#[derive(Debug, Copy, Default, Clone)]
+#[derive(Debug, Copy, Default, Clone, Eq, PartialEq)]
 pub struct ClockConfig {
     /// PLL crystal type
     // TODO: Create enum type
     // https://github.com/bouffalolab/bl_iot_sdk/blob/ee4a10b1a1e3609243bd5e7b3a45f02d768f6c14/components/bl602/bl602_std/bl602_std/StdDriver/Inc/bl602_glb.h#L286-L297
-    crystal_type: u8,
+    xtal_type: u8,
     /// The PLL output clock type
     // TODO: Create enum type
     // https://github.com/bouffalolab/bl_iot_sdk/blob/ee4a10b1a1e3609243bd5e7b3a45f02d768f6c14/components/bl602/bl602_std/bl602_std/StdDriver/Inc/bl602_glb.h#L299-L312
@@ -91,12 +121,11 @@ pub struct ClockConfig {
     flash_clock_type: u8,
     /// Flash clock divider
     flash_clock_divider: u8,
-    // Reserved field
-    _reserved: u16,
+    /// CRC32 checksum
+    crc32: u32,
 }
 
-#[repr(C, packed)]
-#[derive(Debug, Copy, Default, Clone)]
+#[derive(Debug, Copy, Default, Clone, Eq, PartialEq)]
 pub struct FlashConfig {
     // Serail flash interface mode,bit0-3:IF mode,bit4:unwrap */
     io_mode: u8,
@@ -245,16 +274,118 @@ pub struct FlashConfig {
     quad_enable_data: u8,
 }
 
-impl FlashConfig {
-    pub fn from_slice<T: TryInto<[u8; FLASH_CONFIG_STRUCT_SIZE]>>(
-        slice: T,
-    ) -> Result<FlashConfig, T::Error> {
-        let fixed_size_ary = slice.try_into()?;
-        let config = unsafe {
-            std::mem::transmute::<[u8; FLASH_CONFIG_STRUCT_SIZE], FlashConfig>(fixed_size_ary)
+impl Firmware {
+    pub fn from_reader<R: ReadBytesExt + Seek>(mut reader: R) -> Result<Self, ParseError> {
+        let mut magic = [0u8; 4];
+
+        // Read the magic header
+        reader.read_exact(&mut magic)?;
+
+        // Determine which CPU this firmware is for
+        let cpu = match &magic {
+            b"BFNP" => Cpu::Cpu0,
+            b"BFAP" => Cpu::Cpu1,
+            _ => {
+                return Err(ParseError::BootHeaderError(
+                    BootHeaderError::InvalidMagicHeader(magic),
+                ))
+            }
         };
 
-        Ok(config)
+        // Read the boot header revision
+        let revision = reader.read_u32::<LittleEndian>()?;
+
+        // Skip the flash config
+        reader.seek(SeekFrom::Current(0x5c))?;
+
+        // Read the flash config
+        let clock_config = ClockConfig::from_reader(&mut reader)?;
+
+        // Read the boot flags
+        let boot_config = reader.read_u32::<LittleEndian>()?;
+
+        // Read the image segment info
+        let image_segment_info = reader.read_u32::<LittleEndian>()?;
+
+        // Read the entry point
+        let entry_point = reader.read_u32::<LittleEndian>()?;
+
+        // Read the image start offset
+        let image_start = reader.read_u32::<LittleEndian>()?;
+
+        // Read the image hash
+        let mut hash = [0u8; 32];
+        reader.read_exact(&mut hash)?;
+
+        // Skip the 8 reserved, unused bytes
+        reader.seek(SeekFrom::Current(8))?;
+
+        // Read the crc32 checksum
+        let crc32 = reader.read_u32::<LittleEndian>()?;
+
+        Ok(Firmware {
+            cpu,
+            revision,
+            flash_config: FlashConfig::default(),
+            clock_config,
+            boot_config,
+            image_segment_info,
+            entry_point,
+            image_start,
+            hash,
+            crc32,
+        })
+    }
+}
+
+impl FlashConfig {
+    pub fn from_reader<R: ReadBytesExt + Seek>(reader: &mut R) -> Result<Self, ParseError> {
+        Ok(FlashConfig::default())
+    }
+}
+
+impl ClockConfig {
+    pub fn from_reader<R: ReadBytesExt + Seek>(reader: &mut R) -> Result<Self, ParseError> {
+        let mut conf = ClockConfig::default();
+        let mut magic = [0u8; 4];
+
+        // Read the magic header
+        reader.read_exact(&mut magic)?;
+
+        // Assert that the magic header is correct
+        // Currently disabled because the eflash loaders have a magic header of [0, 0, 0, 0]
+        //
+        if &magic != b"PCFG" {
+            return Err(ParseError::ClockConfigError(
+                ClockConfigError::InvalidMagicHeader(magic),
+            ));
+        }
+
+        // Read the xtal type
+        conf.xtal_type = reader.read_u8()?;
+
+        // Read the PLL clock
+        conf.pll_clock = reader.read_u8()?;
+
+        // Read the HCLK divider
+        conf.hclk_divider = reader.read_u8()?;
+
+        // Read the BCLK divider
+        conf.bclk_divider = reader.read_u8()?;
+
+        // Read the flash clock type
+        conf.flash_clock_type = reader.read_u8()?;
+
+        // Read the flash clock divider
+        conf.flash_clock_divider = reader.read_u8()?;
+
+        // Skip the 2 reserved bytes that are currently unused
+        reader.seek(SeekFrom::Current(2))?;
+
+        // Read the CRC32 checksum
+        conf.crc32 = reader.read_u32::<LittleEndian>()?;
+
+        Ok(conf)
     }
 }
 
@@ -294,20 +425,15 @@ impl FirmwareBuilder {
         let boot_config = 0;
 
         Ok(Firmware {
-            magic: *b"BFNP", // CPU 1
+            cpu: Cpu::Cpu0,
             revision: 1,
-            flash_magic: *b"FCFG",
             flash_config,
-            flash_crc32: 0,
-            clock_magic: *b"PCFG",
             clock_config,
-            clock_crc32: 0,
             boot_config,
             image_segment_info: 0,
             entry_point,
             image_start: 0,
-            hash: [0; 20],
-            _reserved: 0,
+            hash: [0; 32],
             crc32: 0,
         })
     }
@@ -331,23 +457,36 @@ impl Firmware {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
+
+    const REFERENCE_FIRMWARE: &[u8] = include_bytes!("../../test/test_reference_firmware.bin");
 
     #[test]
-    fn it_should_be_same_size_as_c_struct() {
-        assert_eq!(std::mem::size_of::<FlashConfig>(), FLASH_CONFIG_STRUCT_SIZE);
-        assert_eq!(std::mem::size_of::<ClockConfig>(), CLOCK_CONFIG_STRUCT_SIZE);
-        assert_eq!(std::mem::size_of::<Firmware>(), BOOT_HEADER_STRUCT_SIZE);
+    fn it_should_read_clock_config() {
+        let mut cursor = Cursor::new(&REFERENCE_FIRMWARE[0x64..0x74]);
+        let clock_config = ClockConfig::from_reader(&mut cursor).unwrap();
+
+        assert_eq!(clock_config.xtal_type, 1);
+        assert_eq!(clock_config.flash_clock_divider, 222);
     }
 
     #[test]
-    fn it_should_deserialize_and_serialize_flash_config() {
-        let flash_bin_slice = &crate::bl::EFLASH_LOADER_40M_BIN[0x0c..0x60];
-        let flash_cfg = FlashConfig::from_slice(flash_bin_slice).unwrap();
-        let flash_cfg_mem = unsafe {
-            std::mem::transmute::<FlashConfig, [u8; FLASH_CONFIG_STRUCT_SIZE]>(flash_cfg)
-        };
+    fn it_should_read_firmware() {
+        let hash: [u8; 32] = [
+            0xDD, 0x11, 0x42, 0x8A, 0x2A, 0x77, 0x9F, 0xFA, 0xCD, 0xB8, 0xBC, 0xEF, 0x9C, 0xB6,
+            0x4C, 0xA3, 0x0F, 0x15, 0xAC, 0x19, 0xF5, 0x0E, 0xF3, 0x64, 0x50, 0x3E, 0xB3, 0xE5,
+            0x0E, 0x00, 0x00, 0x00,
+        ];
+        let mut cursor = Cursor::new(&REFERENCE_FIRMWARE);
+        let firmware = Firmware::from_reader(&mut cursor).unwrap();
 
-        assert_eq!(flash_cfg_mem, flash_bin_slice);
-        println!("flash_cfg: {:#?}", flash_cfg);
+        assert_eq!(firmware.cpu, Cpu::Cpu0);
+        assert_eq!(firmware.revision, 1);
+        assert_eq!(firmware.boot_config, 256);
+        assert_eq!(firmware.image_segment_info, 0);
+        assert_eq!(firmware.entry_point, 0x1000000);
+        assert_eq!(firmware.image_start, 0x96703322);
+        assert_eq!(firmware.hash, hash);
+        assert_eq!(firmware.crc32, 0x1000098);
     }
 }
