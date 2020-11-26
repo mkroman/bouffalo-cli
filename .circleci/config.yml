@@ -10,14 +10,20 @@ jobs:
           name: Version information
           command: rustc --version; cargo --version; rustup --version
       - run:
+          name: Build
+          command: cargo build --verbose
+      - run:
+          name: Build bouffalo-cli
+          command: cd bouffalo-cli && cargo build --verbose
+      - run:
+          name: Run bouffalo-cli tests
+          command: cd bouffalo-cli && cargo test --verbose
+      - run:
           name: Add musl target
           command: rustup target add x86_64-unknown-linux-musl
       - run:
           name: Install musl-gcc
           command: sudo apt update && sudo apt install -y musl-tools && sudo rm -rf /var/lib/apt/lists/*
-      - run:
-          name: Build
-          command: cargo build --verbose
       - run:
           name: Build bouffalo-cli release
           command: |
@@ -39,6 +45,7 @@ jobs:
       - attach_workspace:
           at: ./release
       - run:
+          name: Publish github release
           command: |
             set -x
             go get github.com/tcnksm/ghr
