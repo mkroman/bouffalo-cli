@@ -1,209 +1,114 @@
-// Build script inspired by the one in gamozolabs x86_64 kernel:
-// https://github.com/gamozolabs/chocolate_milk/blob/69640cc31e4cd96cbd162ab92fe5cf701c454f74/src/main.rs
-
-use std::fs;
+use std::fs::File;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::thread;
+use std::time::Duration;
 
-const RELEASE_TARGETS: [&str; 3] = [
-    "x86_64-unknown-linux-musl",
-    "x86_64-pc-windows-gnu",
-    "aarch64-unknown-linux-gnu",
-];
+use anyhow::Context;
+use structopt::StructOpt;
 
-/// Runs the given `cmdline` to determine whether the tool called `name` is installed and usable
-///
-/// Returns `Some(())` on success
-fn run_quiet(cmd: &str, args: &[&str]) -> Option<()> {
-    if Command::new(cmd).args(args).status().ok()?.success() {
-        return Some(());
-    } else {
-        return None;
-    }
-}
+mod bl;
+mod bl60x;
+mod cli;
+mod elf_parser;
+mod error;
 
-fn build() -> Result<(), Box<dyn std::error::Error>> {
-    // Create the build folders if they don't exist
-    fs::create_dir_all("build/bootloader")?;
+use bl::Firmware;
+pub use error::Error;
 
-    // Build the bouffalo cli tool
-    println!("Building bouffali-cli");
+fn get_boot_info(port: &str) -> Result<(), anyhow::Error> {
+    println!("Using serial device {:?}", port);
 
-    let bouffalo_cli_dir = Path::new("bouffalo-cli");
+    // Open a serial port to the blx602 device
+    let mut port = bl60x::Bl60xSerialPort::open(port)?;
 
-    if !Command::new("cargo")
-        .current_dir(bouffalo_cli_dir)
-        .arg("build")
-        .arg("--target-dir")
-        .arg("../build/bouffali-cli")
-        .arg("--release")
-        .stdout(Stdio::null())
-        .status()?
-        .success()
-    {
-        return Err("Could not build bouffalo-cli".into());
-    }
+    // Put the BootROM into UART mode
+    port.enter_uart_mode()?;
 
-    // Build the bootloader
-    let bootloader_dir = Path::new("bootloader");
+    // Wait for 20ms
+    thread::sleep(Duration::from_millis(20));
 
-    println!("Building bootloader");
+    // Send get_boot_info command
+    let boot_info = port.get_boot_info()?;
 
-    if !Command::new("cargo")
-        .current_dir(bootloader_dir)
-        .arg("build")
-        .arg("--target-dir")
-        .arg("../build/bootloader")
-        .arg("--release")
-        .status()?
-        .success()
-    {
-        return Err("Could not build bootloader".into());
-    }
+    println!("BootROM version: {}", boot_info.rom_version);
+    println!("OTP flags:");
 
-    // Convert the elf to a firmware image
-    if !Command::new("build/bouffali-cli/release/bouffalo-cli")
-        .arg("elf2image")
-        .arg("build/bootloader/riscv32imac-unknown-none-elf/release/bootloader")
-        .status()?
-        .success()
-    {
-        return Err("Could not convert elf to firmware image".into());
-    }
-    Ok(())
-}
+    // Print the individual bits of the OTP flags over multiple lines
+    let otp_bit_strs: Vec<String> = boot_info
+        .otp_info
+        .iter()
+        .map(|x| format!("{:08b}", x))
+        .collect();
 
-fn release() -> Result<(), Box<dyn std::error::Error>> {
-    let bouffalo_cli_dir = Path::new("bouffalo-cli");
-
-    run_quiet("git", &["version"]).expect("git not available");
-    run_quiet("cross", &["version"]).expect("cross not available");
-    run_quiet("gzip", &["-V"]).expect("gzip not available");
-
-    // Get the current git tag
-    let git_tag = String::from_utf8(
-        Command::new("git")
-            .args(&["describe", "--tags"])
-            .output()
-            .expect("Could not get current git tag")
-            .stdout,
-    )
-    .expect("Could not parse git output");
-
-    // Create a temporary staging directory
-    let temp_dir = std::env::temp_dir().join("bouffalo-release");
-    std::fs::create_dir_all(&temp_dir)?;
-
-    for target in RELEASE_TARGETS.iter() {
-        println!("Building bouffalo-cli for target {}", target);
-
-        if !Command::new("cross")
-            .current_dir(bouffalo_cli_dir)
-            .arg("build")
-            .arg("--verbose")
-            .arg("--release")
-            .arg("--target")
-            .arg(target)
-            .status()?
-            .success()
-        {
-            return Err(format!("Failed to build bouffalo-cli for target {}", target).into());
-        }
-
-        // Copy the executable to the temporary working directory
-        let filename = if target == &"x86_64-pc-windows-gnu" {
-            "bouffalo-cli.exe"
-        } else {
-            "bouffalo-cli"
-        };
-
-        let exe_path = bouffalo_cli_dir
-            .join("target")
-            .join(target)
-            .join("release")
-            .join(filename);
-
-        // Format the filename as `bouffalo-cli-<git tag>-<target>[.exe]`
-        let target_filename = if target == &"x86_64-pc-windows-gnu" {
-            format!(
-                "{}-{}-{}.exe",
-                exe_path.file_stem().unwrap().to_string_lossy(),
-                &git_tag.trim(),
-                target
-            )
-        } else {
-            format!(
-                "{}-{}-{}",
-                exe_path.file_stem().unwrap().to_string_lossy(),
-                &git_tag.trim(),
-                target
-            )
-        };
-
-        let mut temp_exe_path = temp_dir.join(target_filename);
-
-        if let Some(ext) = exe_path.extension() {
-            temp_exe_path.set_extension(ext);
-        }
-
+    for row in 0..otp_bit_strs.len() / 4 {
         println!(
-            "Copying {} to {}",
-            &exe_path.display(),
-            &temp_exe_path.display()
+            "  {} {} {} {}",
+            otp_bit_strs[row * 4],
+            otp_bit_strs[1 + row * 4],
+            otp_bit_strs[2 + row * 4],
+            otp_bit_strs[3 + row * 4]
         );
-
-        std::fs::copy(&exe_path, &temp_exe_path)?;
-        println!("Compressing {} with `gzip`", &temp_exe_path.display());
-
-        // Compress the file using the `gzip` command line tool
-        if !Command::new("gzip")
-            .arg("--force")
-            .arg(&temp_exe_path)
-            .status()?
-            .success()
-        {
-            return Err(format!("Failed to run gzip on file {}", &temp_exe_path.display()).into());
-        }
-
-        if let Ok(github_token) = std::env::var("GITHUB_TOKEN") {
-            // Run `ghr` to publish the executable in a release
-            run_quiet("ghr", &["-v"]).expect("ghr is not installed");
-
-            if !Command::new("ghr")
-                .env("GITHUB_TOKEN", github_token)
-                .arg(&git_tag.trim())
-                .arg(format!("{}.gz", temp_exe_path.display()))
-                .status()?
-                .success()
-            {
-                eprintln!(
-                    "Failed to run ghr to submit file {}",
-                    &temp_exe_path.display()
-                );
-            }
-        } else {
-            eprintln!("GITHUB_TOKEN not set, so not submitting releases to github");
-        }
     }
 
     Ok(())
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().collect();
+fn elf2image<P: AsRef<Path>>(input_path: P) -> Result<(), anyhow::Error> {
+    let file = File::open(&input_path)?;
+    let parser = elf_parser::ElfParser::parse(file).with_context(|| {
+        format!(
+            "Failed to parse header of ELF file '{}'",
+            input_path.as_ref().display()
+        )
+    })?;
 
-    if args.len() < 2 {
-        build()?;
-    } else {
-        let action = args.get(1).unwrap();
+    let fw = Firmware::builder()
+        .entry_point(0x1337)
+        .build()
+        .with_context(|| "Failed to build firmware image")?;
 
-        match action.as_str() {
-            "build" => build()?,
-            "release" => release()?,
-            _ => {
-                eprintln!("Unknown action: {}", action);
-            }
+    println!("ELF header: {:?}", parser);
+    println!("Firmware: {:?}", fw);
+
+    Ok(())
+}
+
+fn main() -> Result<(), anyhow::Error> {
+    use cli::{Command, Elf2ImageOpts, FlashCommand, FlashReadOpts};
+
+    // Create a logger with a timestamp that logs everything at Info level or above
+    pretty_env_logger::init_timed();
+
+    // Parse the command-line arguments
+    let opts = cli::Opts::from_args();
+
+    match &opts.command {
+        Command::Info => {
+            let serial_port = opts.serial_port;
+
+            get_boot_info(&serial_port)?;
         }
+        Command::Flash(FlashCommand::Read(FlashReadOpts {
+            address,
+            size,
+            filename,
+        })) => {
+            println!(
+                "Reading flash at {:#010x} of size {} to file {}",
+                address,
+                size,
+                filename.as_path().display()
+            );
+        }
+        Command::Elf2Image(Elf2ImageOpts { filename }) => {
+            println!(
+                "Converting elf image {} to firmware",
+                filename.as_path().display()
+            );
+
+            elf2image(filename)?;
+        }
+        _ => {}
     }
 
     Ok(())

@@ -721,10 +721,14 @@ impl ClockConfig {
     }
 
     /// Writes the clock config to the given `writer`
-    pub fn write<W: Write>(&self, writer: &mut W) -> Result<(), ParseError> {
+    pub fn write_to<W: Write>(&self, writer: &mut W) -> Result<(), ParseError> {
         use std::io::Cursor;
+
         let mut buf = [0u8; 12];
 
+        // Create a new temporary `Cursor` for writing with mutable access - if we were to move
+        // it out if this scope, we can no longer access `buf` as immutable when we need to
+        // calculate the crc32 checksum
         {
             let mut buf_writer = Cursor::new(&mut buf[..]);
 
@@ -853,7 +857,7 @@ mod tests {
         let clock_config = ClockConfig::from_reader(&mut cursor).unwrap();
 
         let mut buf: Vec<u8> = Vec::with_capacity(1024);
-        clock_config.write(&mut buf).unwrap();
+        clock_config.write_to(&mut buf).unwrap();
 
         assert_eq!(&buf[..], &REFERENCE_FIRMWARE[0x64..0x74]);
     }
