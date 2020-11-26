@@ -30,10 +30,20 @@ pub enum BootHeaderError {
     InvalidMagicHeader([u8; 4]),
 }
 
+/// Flash config validation errors
+#[derive(Error, Debug)]
+pub enum FlashConfigError {
+    #[error("The magic header value is invalid: {:?}", _0)]
+    InvalidMagicHeader([u8; 4]),
+}
+
 #[derive(Error, Debug)]
 pub enum ParseError {
     #[error("Boot header error: {}", _0)]
     BootHeaderError(#[from] BootHeaderError),
+
+    #[error("Flash config error: {}", _0)]
+    FlashConfigError(#[from] FlashConfigError),
 
     #[error("Clock config error: {}", _0)]
     ClockConfigError(#[from] ClockConfigError),
@@ -272,6 +282,8 @@ pub struct FlashConfig {
     power_down_delay: u8,
     // QE set data */
     quad_enable_data: u8,
+    /// CRC32 checksum
+    crc32: u32,
 }
 
 impl Firmware {
@@ -296,7 +308,7 @@ impl Firmware {
         let revision = reader.read_u32::<LittleEndian>()?;
 
         // Skip the flash config
-        reader.seek(SeekFrom::Current(0x5c))?;
+        let flash_config = FlashConfig::from_reader(&mut reader)?;
 
         // Read the flash config
         let clock_config = ClockConfig::from_reader(&mut reader)?;
@@ -326,7 +338,7 @@ impl Firmware {
         Ok(Firmware {
             cpu,
             revision,
-            flash_config: FlashConfig::default(),
+            flash_config,
             clock_config,
             boot_config,
             image_segment_info,
@@ -340,7 +352,315 @@ impl Firmware {
 
 impl FlashConfig {
     pub fn from_reader<R: ReadBytesExt + Seek>(reader: &mut R) -> Result<Self, ParseError> {
-        Ok(FlashConfig::default())
+        let mut magic = [0u8; 4];
+
+        // Read the magic header
+        reader.read_exact(&mut magic)?;
+
+        // Assert that the magic header is correct
+        if &magic != b"FCFG" {
+            return Err(ParseError::FlashConfigError(
+                FlashConfigError::InvalidMagicHeader(magic),
+            ));
+        }
+
+        // Read the I/O mode
+        let io_mode = reader.read_u8()?;
+
+        // Read continuous_read_support
+        let continuous_read_support = reader.read_u8()?;
+
+        // Read clock_delay
+        let clock_delay = reader.read_u8()?;
+
+        // Read clock_invert
+        let clock_invert = reader.read_u8()?;
+
+        // Read reset_enable_cmd
+        let reset_enable_cmd = reader.read_u8()?;
+
+        // Read reset_cmd
+        let reset_cmd = reader.read_u8()?;
+
+        // Read reset_continuous_read_cmd
+        let reset_continuous_read_cmd = reader.read_u8()?;
+
+        // Read reset_continuous_read_cmd_size
+        let reset_continuous_read_cmd_size = reader.read_u8()?;
+
+        // Read jedec_id_cmd
+        let jedec_id_cmd = reader.read_u8()?;
+
+        // Read jedec_id_cmd_dummy_clock
+        let jedec_id_cmd_dummy_clock = reader.read_u8()?;
+
+        // Read qpi_jedec_id_cmd
+        let qpi_jedec_id_cmd = reader.read_u8()?;
+
+        // Read qpi_jedec_id_cmd_dummy_clock
+        let qpi_jedec_id_cmd_dummy_clock = reader.read_u8()?;
+
+        // Read sector_size
+        let sector_size = reader.read_u8()?;
+
+        // Read manufacturer_id
+        let manufacturer_id = reader.read_u8()?;
+
+        // Read page_size
+        let page_size = reader.read_u16::<LittleEndian>()?;
+
+        // Read chip_erase_cmd
+        let chip_erase_cmd = reader.read_u8()?;
+
+        // Read sector_erase_cmd
+        let sector_erase_cmd = reader.read_u8()?;
+
+        // Read block_erase_32k_cmd
+        let block_erase_32k_cmd = reader.read_u8()?;
+
+        // Read block_erase_64k_cmd
+        let block_erase_64k_cmd = reader.read_u8()?;
+
+        // Read write_enable_cmd
+        let write_enable_cmd = reader.read_u8()?;
+
+        // Read page_program_cmd
+        let page_program_cmd = reader.read_u8()?;
+
+        // Read qio_page_program_cmd
+        let qio_page_program_cmd = reader.read_u8()?;
+
+        // Read qio_page_program_address_mode
+        let qio_page_program_address_mode = reader.read_u8()?;
+
+        // Read fast_read_cmd
+        let fast_read_cmd = reader.read_u8()?;
+
+        // Read fast_read_cmd_dummy_clock
+        let fast_read_cmd_dummy_clock = reader.read_u8()?;
+
+        // Read qpi_fast_read_cmd
+        let qpi_fast_read_cmd = reader.read_u8()?;
+
+        // Read qpi_fast_read_cmd_dummy_clock
+        let qpi_fast_read_cmd_dummy_clock = reader.read_u8()?;
+
+        // Read fast_read_dual_output_cmd
+        let fast_read_dual_output_cmd = reader.read_u8()?;
+
+        // Read fast_read_dual_output_cmd_dummy_clock
+        let fast_read_dual_output_cmd_dummy_clock = reader.read_u8()?;
+
+        // Read fast_read_dual_io_cmd
+        let fast_read_dual_io_cmd = reader.read_u8()?;
+
+        // Read fast_read_dual_io_cmd_dummy_clock
+        let fast_read_dual_io_cmd_dummy_clock = reader.read_u8()?;
+
+        // Read fast_read_quad_output_cmd
+        let fast_read_quad_output_cmd = reader.read_u8()?;
+
+        // Read fast_read_quad_output_cmd_dummy_clock
+        let fast_read_quad_output_cmd_dummy_clock = reader.read_u8()?;
+
+        // Read fast_read_quad_io_cmd
+        let fast_read_quad_io_cmd = reader.read_u8()?;
+
+        // Read fast_read_quad_io_cmd_dummy_clock
+        let fast_read_quad_io_cmd_dummy_clock = reader.read_u8()?;
+
+        // Read qpi_fast_read_quad_io_cmd
+        let qpi_fast_read_quad_io_cmd = reader.read_u8()?;
+
+        // Read qpi_fast_read_quad_io_cmd_dummy_clock
+        let qpi_fast_read_quad_io_cmd_dummy_clock = reader.read_u8()?;
+
+        // Read qpi_program_cmd
+        let qpi_program_cmd = reader.read_u8()?;
+
+        // Read volatile_register_write_enable_cmd
+        let volatile_register_write_enable_cmd = reader.read_u8()?;
+
+        // Read write_enable_reg_index
+        let write_enable_reg_index = reader.read_u8()?;
+
+        // Read quad_mode_enable_reg_index
+        let quad_mode_enable_reg_index = reader.read_u8()?;
+
+        // Read busy_status_reg_index
+        let busy_status_reg_index = reader.read_u8()?;
+
+        // Read write_enable_bit_pos
+        let write_enable_bit_pos = reader.read_u8()?;
+
+        // Read quad_enable_bit_pos
+        let quad_enable_bit_pos = reader.read_u8()?;
+
+        // Read busy_status_bit_pos
+        let busy_status_bit_pos = reader.read_u8()?;
+
+        // Read write_enable_reg_write_len
+        let write_enable_reg_write_len = reader.read_u8()?;
+
+        // Read write_enable_reg_read_len
+        let write_enable_reg_read_len = reader.read_u8()?;
+
+        // Read quad_enable_reg_write_len
+        let quad_enable_reg_write_len = reader.read_u8()?;
+
+        // Read quad_enable_reg_read_len
+        let quad_enable_reg_read_len = reader.read_u8()?;
+
+        // Read release_power_down_cmd
+        let release_power_down_cmd = reader.read_u8()?;
+
+        // Read busy_status_reg_read_len
+        let busy_status_reg_read_len = reader.read_u8()?;
+
+        // Read read_reg_cmd_buffer
+        let mut read_reg_cmd_buffer = [0u8; 4];
+        reader.read_exact(&mut read_reg_cmd_buffer)?;
+
+        // Read write_reg_cmd_buffer
+        let mut write_reg_cmd_buffer = [0u8; 4];
+        reader.read_exact(&mut write_reg_cmd_buffer)?;
+
+        // Read enter_qpi_cmd
+        let enter_qpi_cmd = reader.read_u8()?;
+
+        // Read exit_qpi_cmd
+        let exit_qpi_cmd = reader.read_u8()?;
+
+        // Read continuous_read_mode_cfg
+        let continuous_read_mode_cfg = reader.read_u8()?;
+
+        // Read continuous_read_mode_exit_cfg
+        let continuous_read_mode_exit_cfg = reader.read_u8()?;
+
+        // Read enable_burst_wrap_cmd
+        let enable_burst_wrap_cmd = reader.read_u8()?;
+
+        // Read enable_burst_wrap_cmd_dummy_clock
+        let enable_burst_wrap_cmd_dummy_clock = reader.read_u8()?;
+
+        // Read burst_wrap_data_mode
+        let burst_wrap_data_mode = reader.read_u8()?;
+
+        // Read burst_wrap_data
+        let burst_wrap_data = reader.read_u8()?;
+
+        // Read disable_burst_wrap_cmd
+        let disable_burst_wrap_cmd = reader.read_u8()?;
+
+        // Read disable_burst_wrap_cmd_dummy_clock
+        let disable_burst_wrap_cmd_dummy_clock = reader.read_u8()?;
+
+        // Read disable_burst_wrap_data_mode
+        let disable_burst_wrap_data_mode = reader.read_u8()?;
+
+        // Read disable_burst_wrap_data
+        let disable_burst_wrap_data = reader.read_u8()?;
+
+        // Read sector_erase_time_4k
+        let sector_erase_time_4k = reader.read_u16::<LittleEndian>()?;
+
+        // Read sector_erase_time_32k
+        let sector_erase_time_32k = reader.read_u16::<LittleEndian>()?;
+
+        // Read sector_erase_time_64k
+        let sector_erase_time_64k = reader.read_u16::<LittleEndian>()?;
+
+        // Read page_program_time
+        let page_program_time = reader.read_u16::<LittleEndian>()?;
+
+        // Read chip_erase_time
+        let chip_erase_time = reader.read_u16::<LittleEndian>()?;
+
+        // Read power_down_delay
+        let power_down_delay = reader.read_u8()?;
+
+        // Read quad_enable_data
+        let quad_enable_data = reader.read_u8()?;
+
+        // Read the crc32 checksum
+        let crc32 = reader.read_u32::<LittleEndian>()?;
+
+        Ok(FlashConfig {
+            io_mode,
+            continuous_read_support,
+            clock_delay,
+            clock_invert,
+            reset_enable_cmd,
+            reset_cmd,
+            reset_continuous_read_cmd,
+            reset_continuous_read_cmd_size,
+            jedec_id_cmd,
+            jedec_id_cmd_dummy_clock,
+            qpi_jedec_id_cmd,
+            qpi_jedec_id_cmd_dummy_clock,
+            sector_size,
+            manufacturer_id,
+            page_size,
+            chip_erase_cmd,
+            sector_erase_cmd,
+            block_erase_32k_cmd,
+            block_erase_64k_cmd,
+            write_enable_cmd,
+            page_program_cmd,
+            qio_page_program_cmd,
+            qio_page_program_address_mode,
+            fast_read_cmd,
+            fast_read_cmd_dummy_clock,
+            qpi_fast_read_cmd,
+            qpi_fast_read_cmd_dummy_clock,
+            fast_read_dual_output_cmd,
+            fast_read_dual_output_cmd_dummy_clock,
+            fast_read_dual_io_cmd,
+            fast_read_dual_io_cmd_dummy_clock,
+            fast_read_quad_output_cmd,
+            fast_read_quad_output_cmd_dummy_clock,
+            fast_read_quad_io_cmd,
+            fast_read_quad_io_cmd_dummy_clock,
+            qpi_fast_read_quad_io_cmd,
+            qpi_fast_read_quad_io_cmd_dummy_clock,
+            qpi_program_cmd,
+            volatile_register_write_enable_cmd,
+            write_enable_reg_index,
+            quad_mode_enable_reg_index,
+            busy_status_reg_index,
+            write_enable_bit_pos,
+            quad_enable_bit_pos,
+            busy_status_bit_pos,
+            write_enable_reg_write_len,
+            write_enable_reg_read_len,
+            quad_enable_reg_write_len,
+            quad_enable_reg_read_len,
+            release_power_down_cmd,
+            busy_status_reg_read_len,
+            read_reg_cmd_buffer,
+            write_reg_cmd_buffer,
+            enter_qpi_cmd,
+            exit_qpi_cmd,
+            continuous_read_mode_cfg,
+            continuous_read_mode_exit_cfg,
+            enable_burst_wrap_cmd,
+            enable_burst_wrap_cmd_dummy_clock,
+            burst_wrap_data_mode,
+            burst_wrap_data,
+            disable_burst_wrap_cmd,
+            disable_burst_wrap_cmd_dummy_clock,
+            disable_burst_wrap_data_mode,
+            disable_burst_wrap_data,
+            sector_erase_time_4k,
+            sector_erase_time_32k,
+            sector_erase_time_64k,
+            page_program_time,
+            chip_erase_time,
+            power_down_delay,
+            quad_enable_data,
+            crc32,
+            ..Default::default()
+        })
     }
 }
 
@@ -468,6 +788,16 @@ mod tests {
 
         assert_eq!(clock_config.xtal_type, 1);
         assert_eq!(clock_config.flash_clock_divider, 222);
+    }
+
+    #[test]
+    fn it_should_read_flash_config() {
+        let mut cursor = Cursor::new(&REFERENCE_FIRMWARE[0x08..0x64]);
+        let flash_config = FlashConfig::from_reader(&mut cursor).unwrap();
+
+        assert_eq!(flash_config.io_mode, 20);
+        assert_eq!(flash_config.quad_enable_data, 0);
+        assert_eq!(flash_config.crc32, 0x41f2afa2);
     }
 
     #[test]
