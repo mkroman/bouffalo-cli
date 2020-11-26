@@ -1,5 +1,4 @@
-use std::convert::TryInto;
-use std::io::{self, Seek, SeekFrom};
+use std::io::{self, Seek, SeekFrom, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt};
 use thiserror::Error;
@@ -7,14 +6,26 @@ use thiserror::Error;
 /// The default entry point when the user doesn't provide one when using the `FirmwareBuilder`
 const DEFAULT_ENTRY_POINT: u32 = 0x2100_0000;
 
-/// The size of the flash config structure, excluding the magic header and the crc32
-const FLASH_CONFIG_STRUCT_SIZE: usize = 84;
+/// Calculates the crc32 checksum for the given slice of `bytes`
+///
+/// The crc32 is implemented with the polynomial 0xEDB88320 and the initial value of 0xFFFFFFFF
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc: u32 = 0xFFFFFFFF;
 
-/// The size of the clock config structure, excluding the magic header and the crc32
-const CLOCK_CONFIG_STRUCT_SIZE: usize = 8;
+    for byte in bytes {
+        crc ^= *byte as u32;
 
-/// The size of the boot header structure, excluding the magic header and the crc32
-const BOOT_HEADER_STRUCT_SIZE: usize = 164;
+        for _ in 0..8 {
+            if crc & 1 > 0 {
+                crc = (crc >> 1) ^ 0xEDB88320;
+            } else {
+                crc = crc >> 1;
+            }
+        }
+    }
+
+    !crc
+}
 
 /// Clock config validation errors
 #[derive(Error, Debug)]
@@ -351,6 +362,8 @@ impl Firmware {
 }
 
 impl FlashConfig {
+    /// Reads and parses the flash config from existing firmware by using `reader`, returning
+    /// `FlashConfig` on success, `ParseError` otherwise
     pub fn from_reader<R: ReadBytesExt + Seek>(reader: &mut R) -> Result<Self, ParseError> {
         let mut magic = [0u8; 4];
 
@@ -707,6 +720,50 @@ impl ClockConfig {
 
         Ok(conf)
     }
+
+    /// Writes the clock config to the given `writer`
+    pub fn write<W: Write>(&self, writer: &mut W) -> Result<(), ParseError> {
+        use std::io::Cursor;
+        let mut buf = [0u8; 12];
+
+        {
+            let mut buf_writer = Cursor::new(&mut buf[..]);
+
+            // Write the magic header value
+            buf_writer.write_all(b"PCFG")?;
+
+            // Write the xtal type
+            buf_writer.write_all(&self.xtal_type.to_le_bytes())?;
+
+            // Write the PLL clock type
+            buf_writer.write_all(&self.pll_clock.to_le_bytes())?;
+
+            // Write the HCLK divider value
+            buf_writer.write_all(&self.hclk_divider.to_le_bytes())?;
+
+            // Write the BCLK divider value
+            buf_writer.write_all(&self.bclk_divider.to_le_bytes())?;
+
+            // Write the flash clock type
+            buf_writer.write_all(&self.flash_clock_type.to_le_bytes())?;
+
+            // Write the flash clock divider value
+            buf_writer.write_all(&self.flash_clock_divider.to_le_bytes())?;
+
+            // Write the reserved, unused fields
+            buf_writer.write_all(&[0, 0])?;
+        }
+
+        // Write our temporary memory buffer to our final writer
+        writer.write_all(&buf)?;
+
+        // Calculate and write the crc32 checksum
+        let crc32 = crc32(&buf[0x4..0xc]);
+
+        writer.write_all(&crc32.to_le_bytes())?;
+
+        Ok(())
+    }
 }
 
 pub struct FirmwareBuilder {
@@ -779,15 +836,27 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
-    const REFERENCE_FIRMWARE: &[u8] = include_bytes!("../../test/test_reference_firmware.bin");
+    const REFERENCE_FIRMWARE: &[u8] =
+        include_bytes!("../../test/whole_dts40M_pt2M_boot2release_ef7015.bin");
 
     #[test]
     fn it_should_read_clock_config() {
         let mut cursor = Cursor::new(&REFERENCE_FIRMWARE[0x64..0x74]);
         let clock_config = ClockConfig::from_reader(&mut cursor).unwrap();
 
-        assert_eq!(clock_config.xtal_type, 1);
-        assert_eq!(clock_config.flash_clock_divider, 222);
+        assert_eq!(clock_config.xtal_type, 4);
+        assert_eq!(clock_config.flash_clock_divider, 1);
+    }
+
+    #[test]
+    fn it_should_write_valid_clock_config() {
+        let mut cursor = Cursor::new(&REFERENCE_FIRMWARE[0x64..0x74]);
+        let clock_config = ClockConfig::from_reader(&mut cursor).unwrap();
+
+        let mut buf: Vec<u8> = Vec::with_capacity(1024);
+        clock_config.write(&mut buf).unwrap();
+
+        assert_eq!(&buf[..], &REFERENCE_FIRMWARE[0x64..0x74]);
     }
 
     #[test]
@@ -795,28 +864,29 @@ mod tests {
         let mut cursor = Cursor::new(&REFERENCE_FIRMWARE[0x08..0x64]);
         let flash_config = FlashConfig::from_reader(&mut cursor).unwrap();
 
-        assert_eq!(flash_config.io_mode, 20);
+        assert_eq!(flash_config.io_mode, 4);
+        assert_eq!(flash_config.sector_erase_time_32k, 1200);
         assert_eq!(flash_config.quad_enable_data, 0);
-        assert_eq!(flash_config.crc32, 0x41f2afa2);
+        assert_eq!(flash_config.crc32, 0xC4BDD748);
     }
 
     #[test]
     fn it_should_read_firmware() {
         let hash: [u8; 32] = [
-            0xDD, 0x11, 0x42, 0x8A, 0x2A, 0x77, 0x9F, 0xFA, 0xCD, 0xB8, 0xBC, 0xEF, 0x9C, 0xB6,
-            0x4C, 0xA3, 0x0F, 0x15, 0xAC, 0x19, 0xF5, 0x0E, 0xF3, 0x64, 0x50, 0x3E, 0xB3, 0xE5,
-            0x0E, 0x00, 0x00, 0x00,
+            0xEF, 0xBE, 0xAD, 0xDE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
         ];
         let mut cursor = Cursor::new(&REFERENCE_FIRMWARE);
         let firmware = Firmware::from_reader(&mut cursor).unwrap();
 
         assert_eq!(firmware.cpu, Cpu::Cpu0);
         assert_eq!(firmware.revision, 1);
-        assert_eq!(firmware.boot_config, 256);
-        assert_eq!(firmware.image_segment_info, 0);
-        assert_eq!(firmware.entry_point, 0x1000000);
-        assert_eq!(firmware.image_start, 0x96703322);
+        assert_eq!(firmware.boot_config, 209664);
+        assert_eq!(firmware.image_segment_info, 38608);
+        assert_eq!(firmware.entry_point, 0);
+        assert_eq!(firmware.image_start, 0x2000);
         assert_eq!(firmware.hash, hash);
-        assert_eq!(firmware.crc32, 0x1000098);
+        assert_eq!(firmware.crc32, 0xDEADBEEF);
     }
 }
