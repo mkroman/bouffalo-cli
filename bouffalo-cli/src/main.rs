@@ -74,6 +74,8 @@ fn elf2image<P: AsRef<Path>>(input_path: P) -> Result<(), anyhow::Error> {
 }
 
 fn main() -> Result<(), anyhow::Error> {
+    use cli::{Command, Elf2ImageOpts, FlashCommand, FlashReadOpts};
+
     // Create a logger with a timestamp that logs everything at Info level or above
     pretty_env_logger::init_timed();
 
@@ -81,12 +83,12 @@ fn main() -> Result<(), anyhow::Error> {
     let opts = cli::Opts::from_args();
 
     match &opts.command {
-        cli::Command::Info => {
+        Command::Info => {
             let serial_port = opts.serial_port;
 
             get_boot_info(&serial_port)?;
         }
-        cli::Command::Flash(cli::FlashCommand::Read(cli::FlashReadOpts {
+        Command::Flash(FlashCommand::Read(FlashReadOpts {
             address,
             size,
             filename,
@@ -97,6 +99,14 @@ fn main() -> Result<(), anyhow::Error> {
                 size,
                 filename.as_path().display()
             );
+        }
+        Command::Elf2Image(Elf2ImageOpts { filename }) => {
+            println!(
+                "Converting elf image {} to firmware",
+                filename.as_path().display()
+            );
+
+            elf2image(filename)?;
         }
         _ => {}
     }

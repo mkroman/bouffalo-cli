@@ -1,7 +1,18 @@
+use std::convert::TryInto;
+
 use thiserror::Error;
 
 /// The default entry point when the user doesn't provide one when using the `FirmwareBuilder`
 const DEFAULT_ENTRY_POINT: u32 = 0x2100_0000;
+
+/// The size of the flash config structure, excluding the magic header and the crc32
+const FLASH_CONFIG_STRUCT_SIZE: usize = 84;
+
+/// The size of the clock config structure, excluding the magic header and the crc32
+const CLOCK_CONFIG_STRUCT_SIZE: usize = 8;
+
+/// The size of the boot header structure, excluding the magic header and the crc32
+const BOOT_HEADER_STRUCT_SIZE: usize = 164;
 
 #[derive(Error, Debug)]
 pub enum ParseError {
@@ -15,17 +26,77 @@ pub enum BuilderError {
     MissingFlashConfig,
 }
 
-#[derive(Debug)]
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy)]
 pub struct Firmware {
     /// The magic header - either 'BFNP' or 'BFAP'
     magic: [u8; 4],
     /// The boot header revision?
     revision: u32,
+
+    /// The flash configuration magic header
+    flash_magic: [u8; 4],
+    /// The flash configuration parameters
+    flash_config: FlashConfig,
+    /// The flash configuration crc32 checksum
+    flash_crc32: u32,
+
+    /// The clock configuration magic header
+    clock_magic: [u8; 4],
+    /// The clock configuration parameters
+    clock_config: ClockConfig,
+    /// The clock configuration crc32 checksum
+    clock_crc32: u32,
+
+    /// Boot configuration flags
+    boot_config: u32,
+
+    /// Image segment info
+    image_segment_info: u32,
+
     /// The entry point of the written firmware image
     entry_point: u32,
+
+    /// Image RAM addr or flash offset
+    image_start: u32,
+
+    /// SHA-256 hash of the whole image
+    hash: [u8; 20],
+
+    // "rsv1" and "rsv2" which are 4 bytes each
+    _reserved: u64,
+
+    /// The CRC32 checksum for the boot header
+    crc32: u32,
 }
 
-#[derive(Debug)]
+#[repr(C, packed)]
+#[derive(Debug, Copy, Default, Clone)]
+pub struct ClockConfig {
+    /// PLL crystal type
+    // TODO: Create enum type
+    // https://github.com/bouffalolab/bl_iot_sdk/blob/ee4a10b1a1e3609243bd5e7b3a45f02d768f6c14/components/bl602/bl602_std/bl602_std/StdDriver/Inc/bl602_glb.h#L286-L297
+    crystal_type: u8,
+    /// The PLL output clock type
+    // TODO: Create enum type
+    // https://github.com/bouffalolab/bl_iot_sdk/blob/ee4a10b1a1e3609243bd5e7b3a45f02d768f6c14/components/bl602/bl602_std/bl602_std/StdDriver/Inc/bl602_glb.h#L299-L312
+    pll_clock: u8,
+    /// HCLK divider
+    hclk_divider: u8,
+    /// BCLK divider
+    bclk_divider: u8,
+    /// Flash clock type
+    // TODO: Create enum type
+    // https://github.com/bouffalolab/bl_iot_sdk/blob/ee4a10b1a1e3609243bd5e7b3a45f02d768f6c14/components/bl602/bl602_std/bl602_std/StdDriver/Inc/bl602_glb.h#L101-L111
+    flash_clock_type: u8,
+    /// Flash clock divider
+    flash_clock_divider: u8,
+    // Reserved field
+    _reserved: u16,
+}
+
+#[repr(C, packed)]
+#[derive(Debug, Copy, Default, Clone)]
 pub struct FlashConfig {
     // Serail flash interface mode,bit0-3:IF mode,bit4:unwrap */
     io_mode: u8,
@@ -57,10 +128,8 @@ pub struct FlashConfig {
     manufacturer_id: u8,
     // Page size
     page_size: u16,
-
     // Chip erase command
     chip_erase_cmd: u8,
-
     // Sector erase command
     sector_erase_cmd: u8,
     // Block 32K erase command,some Micron not support */
@@ -77,7 +146,6 @@ pub struct FlashConfig {
     qio_page_program_address_mode: u8,
     // Fast read command */
     fast_read_cmd: u8,
-
     // Fast read command dummy clock */
     fast_read_cmd_dummy_clock: u8,
     // QPI fast read command */
@@ -102,112 +170,92 @@ pub struct FlashConfig {
     fast_read_quad_io_cmd_dummy_clock: u8,
     // QPI fast read quad io comamnd */
     qpi_fast_read_quad_io_cmd: u8,
-
     // QPI fast read QIO dummy clock */
     qpi_fast_read_quad_io_cmd_dummy_clock: u8,
-
     // QPI program command */
     qpi_program_cmd: u8,
-
     // Enable write reg */
-    writeVregEnableCmd: u8,
-
+    // writeVregEnableCmd
+    volatile_register_write_enable_cmd: u8,
     // Write enable register index */
     write_enable_reg_index: u8,
-
     // Quad mode enable register index */
     quad_mode_enable_reg_index: u8,
-
     // Busy status register index */
     busy_status_reg_index: u8,
-
     // Write enable bit pos */
     write_enable_bit_pos: u8,
-
     // Quad enable bit pos */
     quad_enable_bit_pos: u8,
-
     // Busy status bit pos */
     busy_status_bit_pos: u8,
-
     // Register length of write enable */
     write_enable_reg_write_len: u8,
-
     // Register length of write enable status */
     write_enable_reg_read_len: u8,
-
     // Register length of contain quad enable */
     quad_enable_reg_write_len: u8,
-
     // Register length of contain quad enable status */
     quad_enable_reg_read_len: u8,
-
     // Release power down command */
     release_power_down_cmd: u8,
-
     // Register length of contain busy status */
     busy_status_reg_read_len: u8,
-
     // Read register command buffer */
     read_reg_cmd_buffer: [u8; 4],
     // Write register command buffer */
     write_reg_cmd_buffer: [u8; 4],
     // Enter qpi command */
     enter_qpi_cmd: u8,
-
     // Exit qpi command */
     exit_qpi_cmd: u8,
-
     // Config data for continuous read mode */
     continuous_read_mode_cfg: u8,
-
     // Config data for exit continuous read mode */
     continuous_read_mode_exit_cfg: u8,
-
     // Enable burst wrap command */
     enable_burst_wrap_cmd: u8,
-
     // Enable burst wrap command dummy clock */
     enable_burst_wrap_cmd_dummy_clock: u8,
-
     // Data and address mode for this command */
     burst_wrap_data_mode: u8,
-
     // Data to enable burst wrap */
-    burstWrapData: u8,
-
+    burst_wrap_data: u8,
     // Disable burst wrap command */
-    deBurstWrapCmd: u8,
-
+    disable_burst_wrap_cmd: u8,
     // Disable burst wrap command dummy clock */
-    deBurstWrapCmdDmyClk: u8,
-
+    disable_burst_wrap_cmd_dummy_clock: u8,
     // Data and address mode for this command */
-    deBurstWrapDataMode: u8,
-
+    disable_burst_wrap_data_mode: u8,
     // Data to disable burst wrap */
-    deBurstWrapData: u8,
-
+    disable_burst_wrap_data: u8,
     // 4K erase time */
-    timeEsector: u16,
-
+    sector_erase_time_4k: u16,
     // 32K erase time */
-    timeE32k: u16,
-
+    sector_erase_time_32k: u16,
     // 64K erase time */
-    timeE64k: u16,
-
+    sector_erase_time_64k: u16,
     // Page program time */
-    timePagePgm: u16,
-
+    page_program_time: u16,
     // Chip erase time in ms */
-    timeCe: u16,
-
+    chip_erase_time: u16,
     // Release power down command delay time for wake up */
-    pdDelay: u8,
-
+    power_down_delay: u8,
     // QE set data */
-    qeData: u8,
+    quad_enable_data: u8,
+}
+
+impl FlashConfig {
+    pub fn from_slice<T: TryInto<[u8; FLASH_CONFIG_STRUCT_SIZE]>>(
+        slice: T,
+    ) -> Result<FlashConfig, T::Error> {
+        let fixed_size_ary = slice.try_into()?;
+        let config = unsafe {
+            std::mem::transmute::<[u8; FLASH_CONFIG_STRUCT_SIZE], FlashConfig>(fixed_size_ary)
+        };
+
+        Ok(config)
+    }
 }
 
 pub struct FirmwareBuilder {
@@ -237,14 +285,30 @@ impl FirmwareBuilder {
         let entry_point = self.entry_point.unwrap_or(DEFAULT_ENTRY_POINT);
 
         // Assert that a flash configuration has been set
-        if self.flash_config.is_none() {
-            return Err(BuilderError::MissingFlashConfig);
-        }
+        let flash_config = match self.flash_config {
+            Some(flash_config) => flash_config,
+            None => return Err(BuilderError::MissingFlashConfig),
+        };
+
+        let clock_config = ClockConfig::default();
+        let boot_config = 0;
 
         Ok(Firmware {
             magic: *b"BFNP", // CPU 1
             revision: 1,
+            flash_magic: *b"FCFG",
+            flash_config,
+            flash_crc32: 0,
+            clock_magic: *b"PCFG",
+            clock_config,
+            clock_crc32: 0,
+            boot_config,
+            image_segment_info: 0,
             entry_point,
+            image_start: 0,
+            hash: [0; 20],
+            _reserved: 0,
+            crc32: 0,
         })
     }
 }
@@ -261,5 +325,29 @@ impl Default for FirmwareBuilder {
 impl Firmware {
     pub fn builder() -> FirmwareBuilder {
         FirmwareBuilder::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn it_should_be_same_size_as_c_struct() {
+        assert_eq!(std::mem::size_of::<FlashConfig>(), FLASH_CONFIG_STRUCT_SIZE);
+        assert_eq!(std::mem::size_of::<ClockConfig>(), CLOCK_CONFIG_STRUCT_SIZE);
+        assert_eq!(std::mem::size_of::<Firmware>(), BOOT_HEADER_STRUCT_SIZE);
+    }
+
+    #[test]
+    fn it_should_deserialize_and_serialize_flash_config() {
+        let flash_bin_slice = &crate::bl::EFLASH_LOADER_40M_BIN[0x0c..0x60];
+        let flash_cfg = FlashConfig::from_slice(flash_bin_slice).unwrap();
+        let flash_cfg_mem = unsafe {
+            std::mem::transmute::<FlashConfig, [u8; FLASH_CONFIG_STRUCT_SIZE]>(flash_cfg)
+        };
+
+        assert_eq!(flash_cfg_mem, flash_bin_slice);
+        println!("flash_cfg: {:#?}", flash_cfg);
     }
 }

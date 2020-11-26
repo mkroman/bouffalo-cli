@@ -8,6 +8,15 @@ pub enum Command {
     Info,
     /// Operate on the external flash
     Flash(FlashCommand),
+    /// Convert an elf image to a firmware image
+    #[structopt(name = "elf2image")]
+    Elf2Image(Elf2ImageOpts),
+}
+
+#[derive(StructOpt, Debug)]
+pub struct Elf2ImageOpts {
+    /// The elf filename
+    pub filename: PathBuf,
 }
 
 #[derive(StructOpt, Debug)]
