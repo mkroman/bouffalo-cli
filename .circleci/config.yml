@@ -13,28 +13,24 @@ jobs:
           name: Build
           command: cargo build --verbose
       - run:
-          name: Build bouffalo-cli
-          command: cd bouffalo-cli && cargo build --verbose
-      - run:
-          name: Run bouffalo-cli tests
-          command: cd bouffalo-cli && cargo test --verbose
-      - run:
-          name: Add musl target
-          command: rustup target add x86_64-unknown-linux-musl
+          name: Run tests
+          command: cargo test --verbose
       - run:
           name: Install musl-gcc
           command: sudo apt update && sudo apt install -y musl-tools && sudo rm -rf /var/lib/apt/lists/*
       - run:
-          name: Build bouffalo-cli release
+          name: Add musl target
+          command: rustup target add x86_64-unknown-linux-musl
+      - run:
+          name: Build release
           command: |
-            cd bouffalo-cli
             cargo build --release --target=x86_64-unknown-linux-musl
             strip --strip-unneeded target/x86_64-unknown-linux-musl/release/bouffalo-cli
       - store_artifacts:
-          path: bouffalo-cli/target/x86_64-unknown-linux-musl/release/bouffalo-cli
+          path: target/x86_64-unknown-linux-musl/release/bouffalo-cli
           destination: bouffalo-cli
       - persist_to_workspace:
-          root: bouffalo-cli/target/x86_64-unknown-linux-musl/release
+          root: target/x86_64-unknown-linux-musl/release
           paths:
             - bouffalo-cli
   publish-github-release:
