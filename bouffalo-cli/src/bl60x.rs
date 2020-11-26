@@ -98,9 +98,9 @@ impl Bl60xSerialPort {
     /// Makes the BootROM enter UART mode, returns `()` on success, `IspError` otherwise
     pub fn enter_uart_mode(&mut self) -> Result<(), IspError> {
         let mut buf = [0u8; 2];
-        let _ = self.port.write(&[0x55, 0x55, 0x55])?;
+        let _ = self.port.write_all(&[0x55, 0x55, 0x55])?;
 
-        self.port.read(&mut buf)?;
+        self.port.read_exact(&mut buf)?;
 
         if &buf != b"OK" {
             return Err(IspError::HandshakeFailed(buf));
@@ -118,7 +118,7 @@ impl Bl60xSerialPort {
         let mut buf: Vec<u8> = Vec::with_capacity(4096);
 
         command.into().write_cmd_to_buf(&mut buf)?;
-        self.port.write(&buf)?;
+        self.port.write_all(&buf)?;
 
         Ok(())
     }
@@ -128,7 +128,7 @@ impl Bl60xSerialPort {
         self.send_command(GetBootInfo)?;
 
         let mut buf = [0u8; 24];
-        let _ = self.port.read(&mut buf)?;
+        let _ = self.port.read_exact(&mut buf)?;
 
         let rom_version = u32::from_le_bytes(buf[0x4..0x8].try_into().unwrap());
         let otp_info = buf[0x8..0x18].try_into().unwrap();

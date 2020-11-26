@@ -19,7 +19,7 @@ fn crc32(bytes: &[u8]) -> u32 {
             if crc & 1 > 0 {
                 crc = (crc >> 1) ^ 0xEDB88320;
             } else {
-                crc = crc >> 1;
+                crc >>= 1;
             }
         }
     }
@@ -672,7 +672,6 @@ impl FlashConfig {
             power_down_delay,
             quad_enable_data,
             crc32,
-            ..Default::default()
         })
     }
 }

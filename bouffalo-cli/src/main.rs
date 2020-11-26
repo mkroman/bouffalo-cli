@@ -43,7 +43,7 @@ fn get_boot_info(port: &str) -> Result<(), anyhow::Error> {
     for row in 0..otp_bit_strs.len() / 4 {
         println!(
             "  {} {} {} {}",
-            otp_bit_strs[0 + row * 4],
+            otp_bit_strs[row * 4],
             otp_bit_strs[1 + row * 4],
             otp_bit_strs[2 + row * 4],
             otp_bit_strs[3 + row * 4]
