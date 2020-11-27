@@ -1,7 +1,7 @@
 [package]
 name = "bouffalo-cli"
 description = "BL602 Boot ROM utility"
-version = "0.1.0"
+version = "0.0.1"
 authors = ["Mikkel Kroman <mk@maero.dk>"]
 edition = "2018"
 license = "MIT OR Apache-2.0"
