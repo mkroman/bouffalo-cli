@@ -6,6 +6,16 @@ use thiserror::Error;
 /// The default entry point when the user doesn't provide one when using the `FirmwareBuilder`
 const DEFAULT_ENTRY_POINT: u32 = 0x2100_0000;
 
+/// Determines whether the bootROM should ignore the hash of the image
+///
+/// Note that the hash also needs to be 0xDEADBEEF
+const BOOT_FLAG_IGNORE_HASH: u32 = 1 << 16;
+
+/// Determines whether the bootROM should ignore the crc checksum of the header
+///
+/// Note that the CRC also needs to be 0xDEADBEEF
+const BOOT_FLAG_IGNORE_CRC: u32 = 1 << 17;
+
 /// Calculates the crc32 checksum for the given slice of `bytes`
 ///
 /// The crc32 is implemented with the polynomial 0xEDB88320 and the initial value of 0xFFFFFFFF
@@ -358,6 +368,73 @@ impl Firmware {
             hash,
             crc32,
         })
+    }
+    pub fn write_to<W: Write>(&self, writer: &mut W) -> Result<(), ParseError> {
+        use std::io::Cursor;
+
+        let mut buf = [0u8; 172];
+
+        // Create a new temporary `Cursor` for writing with mutable access - if we were to move
+        // it out if this scope, we can no longer access `buf` as immutable when we need to
+        // calculate the crc32 checksum
+        {
+            let mut buf_writer = Cursor::new(&mut buf[..]);
+
+            // Write the magic header value
+            buf_writer.write_all(&self.cpu.to_magic_bytes())?;
+
+            // Write the revision number
+            buf_writer.write_all(&self.revision.to_le_bytes())?;
+
+            // Write the flash config
+            self.flash_config.write_to(&mut buf_writer)?;
+
+            // Write the clock config
+            self.clock_config.write_to(&mut buf_writer)?;
+
+            // Write the boot config flags
+            buf_writer.write_all(&self.boot_config.to_le_bytes())?;
+
+            // Write the image segment info
+            buf_writer.write_all(&self.image_segment_info.to_le_bytes())?;
+
+            // Write the entrypoint
+            buf_writer.write_all(&self.entry_point.to_le_bytes())?;
+
+            // Write the image start addr
+            buf_writer.write_all(&self.image_start.to_le_bytes())?;
+
+            // Calculate and write the hash of the firmware image if wanted, otherwise write
+            // 0xDEADBEEF
+            if self.boot_config & BOOT_FLAG_IGNORE_HASH > 0 {
+                let mut hash = [0u8; 32];
+
+                hash[0x0..0x4].copy_from_slice(&0xDEADBEEFu32.to_le_bytes());
+
+                buf_writer.write_all(&hash)?;
+            } else {
+                unimplemented!();
+            }
+
+            // Write 2 x 4 bytes of reserved fields
+            buf_writer.write_all(&[0x00, 0x00, 0x0, 0x00, 0x00, 0x00, 0x00, 0x00])?;
+        }
+
+        // Write our temporary memory buffer to our final writer
+        writer.write_all(&buf)?;
+
+        // Calculate and write the crc32 checksum if the BOOT_FLAG_IGNORE_CRC isn't set
+        if self.boot_config & BOOT_FLAG_IGNORE_CRC == 0 {
+            // Calculate and write the crc32 checksum
+            let crc32 = crc32(&buf[0x4..0xac]);
+
+            writer.write_all(&crc32.to_le_bytes())?;
+        } else {
+            // Write 0xDEADBEEF
+            writer.write_all(&0xDEADBEEFu32.to_le_bytes())?;
+        }
+
+        Ok(())
     }
 }
 
@@ -1113,6 +1190,17 @@ mod tests {
         flash_config.write_to(&mut buf).unwrap();
 
         assert_eq!(&buf[..], &REFERENCE_FIRMWARE[0x8..0x64]);
+    }
+
+    #[test]
+    fn it_should_write_valid_firmware() {
+        let mut cursor = Cursor::new(&REFERENCE_FIRMWARE);
+        let firmware = Firmware::from_reader(&mut cursor).unwrap();
+
+        let mut buf: Vec<u8> = Vec::with_capacity(1024);
+        firmware.write_to(&mut buf).unwrap();
+
+        assert_eq!(&buf[..], &REFERENCE_FIRMWARE[0x0..0xb0]);
     }
 
     #[test]
