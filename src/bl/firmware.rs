@@ -674,6 +674,248 @@ impl FlashConfig {
             crc32,
         })
     }
+
+    pub fn write_to<W: Write>(&self, writer: &mut W) -> Result<(), ParseError> {
+        use std::io::Cursor;
+
+        let mut buf = [0u8; 88];
+
+        // Create a new temporary `Cursor` for writing with mutable access - if we were to move
+        // it out if this scope, we can no longer access `buf` as immutable when we need to
+        // calculate the crc32 checksum
+        {
+            let mut buf_writer = Cursor::new(&mut buf[..]);
+
+            // Write the magic header value
+            buf_writer.write_all(b"FCFG")?;
+
+            // Write io_mode
+            buf_writer.write_all(&self.io_mode.to_le_bytes())?;
+
+            // Write continuous_read_support
+            buf_writer.write_all(&self.continuous_read_support.to_le_bytes())?;
+
+            // Write clock_delay
+            buf_writer.write_all(&self.clock_delay.to_le_bytes())?;
+
+            // Write clock_invert
+            buf_writer.write_all(&self.clock_invert.to_le_bytes())?;
+
+            // Write reset_enable_cmd
+            buf_writer.write_all(&self.reset_enable_cmd.to_le_bytes())?;
+
+            // Write reset_cmd
+            buf_writer.write_all(&self.reset_cmd.to_le_bytes())?;
+
+            // Write reset_continuous_read_cmd
+            buf_writer.write_all(&self.reset_continuous_read_cmd.to_le_bytes())?;
+
+            // Write reset_continuous_read_cmd_size
+            buf_writer.write_all(&self.reset_continuous_read_cmd_size.to_le_bytes())?;
+
+            // Write jedec_id_cmd
+            buf_writer.write_all(&self.jedec_id_cmd.to_le_bytes())?;
+
+            // Write jedec_id_cmd_dummy_clock
+            buf_writer.write_all(&self.jedec_id_cmd_dummy_clock.to_le_bytes())?;
+
+            // Write qpi_jedec_id_cmd
+            buf_writer.write_all(&self.qpi_jedec_id_cmd.to_le_bytes())?;
+
+            // Write qpi_jedec_id_cmd_dummy_clock
+            buf_writer.write_all(&self.qpi_jedec_id_cmd_dummy_clock.to_le_bytes())?;
+
+            // Write sector_size
+            buf_writer.write_all(&self.sector_size.to_le_bytes())?;
+
+            // Write manufacturer_id
+            buf_writer.write_all(&self.manufacturer_id.to_le_bytes())?;
+
+            // Write page_size
+            buf_writer.write_all(&self.page_size.to_le_bytes())?;
+
+            // Write chip_erase_cmd
+            buf_writer.write_all(&self.chip_erase_cmd.to_le_bytes())?;
+
+            // Write sector_erase_cmd
+            buf_writer.write_all(&self.sector_erase_cmd.to_le_bytes())?;
+
+            // Write block_erase_32k_cmd
+            buf_writer.write_all(&self.block_erase_32k_cmd.to_le_bytes())?;
+
+            // Write block_erase_64k_cmd
+            buf_writer.write_all(&self.block_erase_64k_cmd.to_le_bytes())?;
+
+            // Write write_enable_cmd
+            buf_writer.write_all(&self.write_enable_cmd.to_le_bytes())?;
+
+            // Write page_program_cmd
+            buf_writer.write_all(&self.page_program_cmd.to_le_bytes())?;
+
+            // Write qio_page_program_cmd
+            buf_writer.write_all(&self.qio_page_program_cmd.to_le_bytes())?;
+
+            // Write qio_page_program_address_mode
+            buf_writer.write_all(&self.qio_page_program_address_mode.to_le_bytes())?;
+
+            // Write fast_read_cmd
+            buf_writer.write_all(&self.fast_read_cmd.to_le_bytes())?;
+
+            // Write fast_read_cmd_dummy_clock
+            buf_writer.write_all(&self.fast_read_cmd_dummy_clock.to_le_bytes())?;
+
+            // Write qpi_fast_read_cmd
+            buf_writer.write_all(&self.qpi_fast_read_cmd.to_le_bytes())?;
+
+            // Write qpi_fast_read_cmd_dummy_clock
+            buf_writer.write_all(&self.qpi_fast_read_cmd_dummy_clock.to_le_bytes())?;
+
+            // Write fast_read_dual_output_cmd
+            buf_writer.write_all(&self.fast_read_dual_output_cmd.to_le_bytes())?;
+
+            // Write fast_read_dual_output_cmd_dummy_clock
+            buf_writer.write_all(&self.fast_read_dual_output_cmd_dummy_clock.to_le_bytes())?;
+
+            // Write fast_read_dual_io_cmd
+            buf_writer.write_all(&self.fast_read_dual_io_cmd.to_le_bytes())?;
+
+            // Write fast_read_dual_io_cmd_dummy_clock
+            buf_writer.write_all(&self.fast_read_dual_io_cmd_dummy_clock.to_le_bytes())?;
+
+            // Write fast_read_quad_output_cmd
+            buf_writer.write_all(&self.fast_read_quad_output_cmd.to_le_bytes())?;
+
+            // Write fast_read_quad_output_cmd_dummy_clock
+            buf_writer.write_all(&self.fast_read_quad_output_cmd_dummy_clock.to_le_bytes())?;
+
+            // Write fast_read_quad_io_cmd
+            buf_writer.write_all(&self.fast_read_quad_io_cmd.to_le_bytes())?;
+
+            // Write fast_read_quad_io_cmd_dummy_clock
+            buf_writer.write_all(&self.fast_read_quad_io_cmd_dummy_clock.to_le_bytes())?;
+
+            // Write qpi_fast_read_quad_io_cmd
+            buf_writer.write_all(&self.qpi_fast_read_quad_io_cmd.to_le_bytes())?;
+
+            // Write qpi_fast_read_quad_io_cmd_dummy_clock
+            buf_writer.write_all(&self.qpi_fast_read_quad_io_cmd_dummy_clock.to_le_bytes())?;
+
+            // Write qpi_program_cmd
+            buf_writer.write_all(&self.qpi_program_cmd.to_le_bytes())?;
+
+            // Write volatile_register_write_enable_cmd
+            buf_writer.write_all(&self.volatile_register_write_enable_cmd.to_le_bytes())?;
+
+            // Write write_enable_reg_index
+            buf_writer.write_all(&self.write_enable_reg_index.to_le_bytes())?;
+
+            // Write quad_mode_enable_reg_index
+            buf_writer.write_all(&self.quad_mode_enable_reg_index.to_le_bytes())?;
+
+            // Write busy_status_reg_index
+            buf_writer.write_all(&self.busy_status_reg_index.to_le_bytes())?;
+
+            // Write write_enable_bit_pos
+            buf_writer.write_all(&self.write_enable_bit_pos.to_le_bytes())?;
+
+            // Write quad_enable_bit_pos
+            buf_writer.write_all(&self.quad_enable_bit_pos.to_le_bytes())?;
+
+            // Write busy_status_bit_pos
+            buf_writer.write_all(&self.busy_status_bit_pos.to_le_bytes())?;
+
+            // Write write_enable_reg_write_len
+            buf_writer.write_all(&self.write_enable_reg_write_len.to_le_bytes())?;
+
+            // Write write_enable_reg_read_len
+            buf_writer.write_all(&self.write_enable_reg_read_len.to_le_bytes())?;
+
+            // Write quad_enable_reg_write_len
+            buf_writer.write_all(&self.quad_enable_reg_write_len.to_le_bytes())?;
+
+            // Write quad_enable_reg_read_len
+            buf_writer.write_all(&self.quad_enable_reg_read_len.to_le_bytes())?;
+
+            // Write release_power_down_cmd
+            buf_writer.write_all(&self.release_power_down_cmd.to_le_bytes())?;
+
+            // Write busy_status_reg_read_len
+            buf_writer.write_all(&self.busy_status_reg_read_len.to_le_bytes())?;
+
+            // Write read_reg_cmd_buffer
+            buf_writer.write_all(&self.read_reg_cmd_buffer)?;
+
+            // Write write_reg_cmd_buffer
+            buf_writer.write_all(&self.write_reg_cmd_buffer)?;
+
+            // Write enter_qpi_cmd
+            buf_writer.write_all(&self.enter_qpi_cmd.to_le_bytes())?;
+
+            // Write exit_qpi_cmd
+            buf_writer.write_all(&self.exit_qpi_cmd.to_le_bytes())?;
+
+            // Write continuous_read_mode_cfg
+            buf_writer.write_all(&self.continuous_read_mode_cfg.to_le_bytes())?;
+
+            // Write continuous_read_mode_exit_cfg
+            buf_writer.write_all(&self.continuous_read_mode_exit_cfg.to_le_bytes())?;
+
+            // Write enable_burst_wrap_cmd
+            buf_writer.write_all(&self.enable_burst_wrap_cmd.to_le_bytes())?;
+
+            // Write enable_burst_wrap_cmd_dummy_clock
+            buf_writer.write_all(&self.enable_burst_wrap_cmd_dummy_clock.to_le_bytes())?;
+
+            // Write burst_wrap_data_mode
+            buf_writer.write_all(&self.burst_wrap_data_mode.to_le_bytes())?;
+
+            // Write burst_wrap_data
+            buf_writer.write_all(&self.burst_wrap_data.to_le_bytes())?;
+
+            // Write disable_burst_wrap_cmd
+            buf_writer.write_all(&self.disable_burst_wrap_cmd.to_le_bytes())?;
+
+            // Write disable_burst_wrap_cmd_dummy_clock
+            buf_writer.write_all(&self.disable_burst_wrap_cmd_dummy_clock.to_le_bytes())?;
+
+            // Write disable_burst_wrap_data_mode
+            buf_writer.write_all(&self.disable_burst_wrap_data_mode.to_le_bytes())?;
+
+            // Write disable_burst_wrap_data
+            buf_writer.write_all(&self.disable_burst_wrap_data.to_le_bytes())?;
+
+            // Write sector_erase_time_4k
+            buf_writer.write_all(&self.sector_erase_time_4k.to_le_bytes())?;
+
+            // Write sector_erase_time_32k
+            buf_writer.write_all(&self.sector_erase_time_32k.to_le_bytes())?;
+
+            // Write sector_erase_time_64k
+            buf_writer.write_all(&self.sector_erase_time_64k.to_le_bytes())?;
+
+            // Write page_program_time
+            buf_writer.write_all(&self.page_program_time.to_le_bytes())?;
+
+            // Write chip_erase_time
+            buf_writer.write_all(&self.chip_erase_time.to_le_bytes())?;
+
+            // Write power_down_delay
+            buf_writer.write_all(&self.power_down_delay.to_le_bytes())?;
+
+            // Write quad_enable_data
+            buf_writer.write_all(&self.quad_enable_data.to_le_bytes())?;
+        }
+
+        // Write our temporary memory buffer to our final writer
+        writer.write_all(&buf)?;
+
+        // Calculate and write the crc32 checksum
+        let crc32 = crc32(&buf[0x4..0x58]);
+
+        writer.write_all(&crc32.to_le_bytes())?;
+
+        Ok(())
+    }
 }
 
 impl ClockConfig {
@@ -860,6 +1102,17 @@ mod tests {
         clock_config.write_to(&mut buf).unwrap();
 
         assert_eq!(&buf[..], &REFERENCE_FIRMWARE[0x64..0x74]);
+    }
+
+    #[test]
+    fn it_should_write_valid_flash_config() {
+        let mut cursor = Cursor::new(&REFERENCE_FIRMWARE[0x8..0x64]);
+        let flash_config = FlashConfig::from_reader(&mut cursor).unwrap();
+
+        let mut buf: Vec<u8> = Vec::with_capacity(1024);
+        flash_config.write_to(&mut buf).unwrap();
+
+        assert_eq!(&buf[..], &REFERENCE_FIRMWARE[0x8..0x64]);
     }
 
     #[test]
