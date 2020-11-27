@@ -63,8 +63,8 @@ pub struct Opts {
     /// The serial device to connect to
     #[structopt(
         env = "SERIAL_PORT",
-        short = "d",
-        long = "device",
+        short = "p",
+        long = "port",
         default_value = "/dev/ttyUSB0"
     )]
     pub serial_port: String,
