@@ -29,3 +29,5 @@ for target in ${BUILD_TARGET[@]}; do
   fi
 done
 
+# Remove the temporary directory
+rm -rf "${temp_dir}"
