@@ -77,7 +77,7 @@ fn elf2image<P: AsRef<Path>>(input_path: P) -> Result<(), anyhow::Error> {
 }
 
 fn main() -> Result<(), anyhow::Error> {
-    use cli::{Command, Elf2ImageOpts, FlashCommand, FlashReadOpts};
+    use cli::{Command, Elf2ImageOpts};
 
     // Create a logger with a timestamp that logs everything at Info level or above
     pretty_env_logger::init_timed();
@@ -92,17 +92,10 @@ fn main() -> Result<(), anyhow::Error> {
 
             get_boot_info(&serial_port, baud_rate)?;
         }
-        Command::Flash(FlashCommand::Read(FlashReadOpts {
-            address,
-            size,
-            filename,
-        })) => {
-            println!(
-                "Reading flash at {:#010x} of size {} to file {}",
-                address,
-                size,
-                filename.as_path().display()
-            );
+        Command::Flash(_) => {
+            eprintln!("Flashing is not yet implemented");
+
+            unimplemented!();
         }
         Command::Elf2Image(Elf2ImageOpts { filename }) => {
             println!(
@@ -112,7 +105,6 @@ fn main() -> Result<(), anyhow::Error> {
 
             elf2image(filename)?;
         }
-        _ => {}
     }
 
     Ok(())
