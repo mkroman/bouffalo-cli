@@ -13,22 +13,25 @@ mod elf_parser;
 mod error;
 
 use bl::Firmware;
-pub use error::Error;
 
-fn get_boot_info(port: &str) -> Result<(), anyhow::Error> {
+fn get_boot_info(port: &str, baud_rate: usize) -> Result<(), anyhow::Error> {
     println!("Using serial device {:?}", port);
 
     // Open a serial port to the blx602 device
-    let mut port = bl60x::Bl60xSerialPort::open(port)?;
+    let mut port = bl60x::Bl60xSerialPort::open_with_baud_rate(port, baud_rate)
+        .with_context(|| "Could not open serial port")?;
 
     // Put the BootROM into UART mode
-    port.enter_uart_mode()?;
+    port.enter_uart_mode()
+        .with_context(|| "Could not enter BootROM UART mode")?;
 
     // Wait for 20ms
     thread::sleep(Duration::from_millis(20));
 
     // Send get_boot_info command
-    let boot_info = port.get_boot_info()?;
+    let boot_info = port
+        .get_boot_info()
+        .with_context(|| "Could not get boot info")?;
 
     println!("BootROM version: {}", boot_info.rom_version);
     println!("OTP flags:");
@@ -85,8 +88,9 @@ fn main() -> Result<(), anyhow::Error> {
     match &opts.command {
         Command::Info => {
             let serial_port = opts.serial_port;
+            let baud_rate = opts.baud_rate;
 
-            get_boot_info(&serial_port)?;
+            get_boot_info(&serial_port, baud_rate)?;
         }
         Command::Flash(FlashCommand::Read(FlashReadOpts {
             address,

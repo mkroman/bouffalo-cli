@@ -7,6 +7,8 @@ use log::debug;
 use serial::{SerialPort, SystemPort};
 use thiserror::Error;
 
+pub use crate::error::SerialError;
+
 /// The serial settings expected by the BootROM on the bl602
 pub const BL602_BOOTROM_SERIAL_SETTINGS: serial::PortSettings = serial::PortSettings {
     baud_rate: serial::BaudOther(500_000),
@@ -80,17 +82,26 @@ pub enum IspError {
 impl Bl60xSerialPort {
     /// Opens the given `port` and configures it to use the communication settings expected by the
     /// BL60x bootrom
-    pub fn open<T: AsRef<OsStr> + ?Sized>(port: &T) -> Result<Bl60xSerialPort, serial::Error> {
+    pub fn open_with_baud_rate<T: AsRef<OsStr> + ?Sized>(
+        port: &T,
+        baud_rate: usize,
+    ) -> Result<Bl60xSerialPort, SerialError> {
         debug!("Opening serial port {:?}", port.as_ref());
 
-        let mut port = serial::open(port)?;
-        let settings = BL602_BOOTROM_SERIAL_SETTINGS;
+        let mut port = serial::open(port).map_err(|err| {
+            SerialError::OpenError(port.as_ref().to_string_lossy().into_owned(), err)
+        })?;
+        let mut settings = BL602_BOOTROM_SERIAL_SETTINGS;
         let timeout = Duration::from_millis(2000);
 
+        settings.baud_rate = serial::BaudRate::from_speed(baud_rate);
+
         debug!("Setting baud rate to {}", settings.baud_rate.speed());
-        port.configure(&settings)?;
+        port.configure(&settings)
+            .map_err(|err| SerialError::BaudError(settings.baud_rate.speed(), err))?;
         debug!("Setting timeout to {:?}", timeout);
-        port.set_timeout(timeout)?;
+        port.set_timeout(timeout)
+            .map_err(|err| SerialError::TimeoutError(timeout.as_secs(), err))?;
 
         Ok(Bl60xSerialPort { port })
     }
