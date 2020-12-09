@@ -1154,12 +1154,6 @@ impl FirmwareBuilder {
         self
     }
 
-    /// Sets the flash config to `flash_config`
-    pub fn flash_config(&mut self, flash_config: FlashConfig) -> &mut FirmwareBuilder {
-        self.flash_config = Some(flash_config);
-        self
-    }
-
     /// Builds the final Firmware from this FirmwareBuilder
     ///
     /// Returns the Firmware instance on success, a BuilderError otherwise
@@ -1247,18 +1241,20 @@ mod tests {
         assert_eq!(&buf[..], &REFERENCE_FIRMWARE[0x8..0x64]);
     }
 
-    //    #[test]
-    //    fn it_should_write_valid_firmware() {
-    //        let mut cursor = Cursor::new(&REFERENCE_FIRMWARE);
-    //        let firmware = Firmware::from_reader(&mut cursor).unwrap();
+    //     #[test]
+    //     fn it_should_write_valid_firmware() {
+    //         let mut cursor = Cursor::new(&REFERENCE_FIRMWARE);
+    //         let firmware = Firmware::from_reader(&mut cursor).unwrap();
     //
-    //        let mut buf: Vec<u8> = Vec::with_capacity(1024);
-    //        firmware.write_to(&mut buf).unwrap();
+    //         let mut buf: Vec<u8> = Vec::with_capacity(1024);
+    //         firmware.write_to(&mut buf).unwrap();
     //
-    //        assert_eq!(&buf[..], &REFERENCE_FIRMWARE[0x0..0xb0]);
-    //    }
+    //         assert_eq!(&buf[..], &REFERENCE_FIRMWARE[0x0..0xb0]);
+    //     }
 
     #[test]
+    // FIXME: replace this test with the other commented test once the firmware loader either
+    // supports a non-strict mode, or when the eflash bins are fixed
     fn it_should_write_valid_firmware_tmp() {
         let mut cursor = Cursor::new(&BROKEN_EFLASH_FIRMWARE);
         let firmware = Firmware::from_reader(&mut cursor).unwrap();

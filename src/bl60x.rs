@@ -3,9 +3,9 @@ use std::ffi::OsStr;
 use std::io::{self, Read, Write};
 use std::time::Duration;
 
-use log::debug;
+use log::{debug, trace, warn};
 use num_enum::FromPrimitive;
-use serial::{SerialPort, SystemPort};
+use serial::{BaudRate, SerialPort, SystemPort};
 use thiserror::Error;
 
 use crate::bl::bootrom;
@@ -21,6 +21,7 @@ pub const BL602_BOOTROM_SERIAL_SETTINGS: serial::PortSettings = serial::PortSett
 
 pub struct Bl60xSerialPort {
     port: SystemPort,
+    baud_rate: BaudRate,
 }
 
 pub trait SerialWritableCommand {
@@ -74,7 +75,10 @@ pub struct BootInfo {
 
 #[derive(Error, Debug)]
 pub enum IspError {
-    #[error("Handshake failed - expected OK, got {:?}", _0)]
+    #[error("The device returned an unexpected reply")]
+    UnexpectedReply,
+
+    #[error("Handshake failed - expected OK, got {:x?}", _0)]
     HandshakeFailed([u8; 2]),
     #[error("Boot ROM error: {}", _0)]
     BootRomError(bootrom::Error),
@@ -97,58 +101,49 @@ impl Bl60xSerialPort {
         debug!("Setting timeout to {:?}", timeout);
         port.set_timeout(timeout)?;
 
-        Ok(Bl60xSerialPort { port })
+        Ok(Bl60xSerialPort {
+            port,
+            baud_rate: settings.baud_rate,
+        })
     }
 
     pub fn set_baud_rate(&mut self, baud_rate: serial::BaudRate) -> Result<(), serial::Error> {
+        debug!("Setting serial port baud rate to {}", &baud_rate.speed());
+
         self.port.reconfigure(&|settings| {
             settings.set_baud_rate(baud_rate)?;
 
             Ok(())
         })?;
 
+        self.baud_rate = baud_rate;
+
         Ok(())
     }
 
-    pub fn open_with_baud_rate<T: AsRef<OsStr> + ?Sized>(
-        port: &T,
-        baud_rate: usize,
-    ) -> Result<Bl60xSerialPort, serial::Error> {
-        debug!("Opening serial port {:?}", port.as_ref());
-
-        let mut port = serial::open(port)?;
-        let mut settings = BL602_BOOTROM_SERIAL_SETTINGS;
-        let timeout = Duration::from_millis(2000);
-        settings.baud_rate = serial::BaudOther(baud_rate);
-
-        debug!("Setting baud rate to {}", settings.baud_rate.speed());
-        port.configure(&settings)?;
-        debug!("Setting timeout to {:?}", timeout);
-        port.set_timeout(timeout)?;
-
-        Ok(Bl60xSerialPort { port })
-    }
-
     /// Makes the BootROM enter UART mode, returns `()` on success, `IspError` otherwise
+    ///
+    /// Note:
+    /// After getting a successful result, the user should wait 20ms before proceeding with
+    /// communication
     pub fn enter_uart_mode(&mut self) -> Result<(), IspError> {
         let mut buf = [0u8; 2];
-        let _ = self.port.write_all(&[
-            0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55,
-            0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55,
-            0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55,
-            0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55,
-            0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55,
-            0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55,
-            0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55,
-            0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55,
-        ])?;
 
-        std::thread::sleep(Duration::from_millis(1));
+        // Calculate the number of bytes to send in order to to keep the UART busy for 5ms
+        // bauds * 3s / (8 data bits + 1 start bit + 1 stop bit) / 1000 ms
+        let num_bytes = self.baud_rate.speed().saturating_mul(3) / 10 / 1000;
+
+        trace!("Trying to put device in UART mode");
+        trace!("Sending {} x 0x55 bytes", num_bytes);
+
+        self.port.write_all(&vec![0x55u8; num_bytes])?;
         self.port.read_exact(&mut buf)?;
 
-        if &buf[0x0..0x2] != b"OK" {
+        if &buf != b"OK" {
             return Err(IspError::HandshakeFailed([buf[0], buf[1]]));
         }
+
+        trace!("Device successfully entered UART mode");
 
         Ok(())
     }
@@ -179,14 +174,16 @@ impl Bl60xSerialPort {
         Ok(u16::from_le_bytes([buf[0], buf[1]]))
     }
 
+    /// Attempts to read data from external flash at `address` and `size` bytes forward
+    //pub fn read_flash(&mut self, addr: usize, size: usize) -> Result<(), IspError> {}
+
     /// Sends the given buf as a boot header and attempts to load it
     pub fn load_boot_header(&mut self, boot_header: [u8; 176]) -> Result<(), IspError> {
-        debug!("Sending LoadBootHeader command");
+        trace!("Trying to load boot header to RAM");
 
         self.send_command(LoadBootHeader {
             bootheader: boot_header,
         })?;
-        std::thread::sleep(Duration::from_millis(1));
 
         let mut buf = [0u8; 2];
         let _ = self.port.read_exact(&mut buf)?;
@@ -202,18 +199,127 @@ impl Bl60xSerialPort {
         Ok(())
     }
 
+    /// Reads the 2-byte response from the ROM, returning Ok(()) if the device replies with b"OK",
+    /// returns err otherwise
+    pub fn read_reply(&mut self) -> Result<(), IspError> {
+        let mut buf = [0u8; 2];
+
+        trace!("Reading device reply");
+        self.port.read_exact(&mut buf)?;
+
+        if &buf != b"OK" {
+            if &buf != b"FL" {
+                warn!("Unexpected reply from device");
+
+                return Err(IspError::UnexpectedReply);
+            }
+
+            trace!("Reading error code from device");
+
+            // Read the next 2 bytes which is an error code
+            self.port.read_exact(&mut buf)?;
+            let error_code = u16::from_le_bytes([buf[0], buf[1]]);
+
+            debug!("Error code from device: {}", error_code);
+
+            return Err(IspError::BootRomError(bootrom::Error::from_primitive(
+                error_code,
+            )));
+        }
+
+        trace!("Device replied with OK");
+
+        Ok(())
+    }
+
+    /// Reads the exact number of bytes at flash `addr` to full `buf`.
+    pub fn read_flash_exact(&mut self, addr: u32, out_buf: &mut [u8]) -> Result<(), IspError> {
+        let mut buf = [0u8; 12];
+
+        debug!(
+            "Reading flash 0x{:08x}..{:#08x}",
+            addr,
+            addr as usize + out_buf.len()
+        );
+
+        buf[0x00] = 0x32;
+
+        buf[0x02] = 0x08;
+        buf[0x04..0x08].copy_from_slice(&addr.to_le_bytes());
+        buf[0x08..0x0c].copy_from_slice(&(out_buf.len() as u32).to_le_bytes());
+
+        // Calculate the 8-bit checksum
+        buf[0x01] = buf[0x02..0x0c].iter().sum();
+
+        // Write the command to the serial device
+        self.port.write_all(&buf)?;
+
+        // Read the response and assert that it is OK
+        let _ = self.read_reply()?;
+
+        // Read the flash data length
+        let mut len_buf = [0u8; 2];
+        self.port.read_exact(&mut len_buf)?;
+        let length = u16::from_le_bytes([len_buf[0], len_buf[1]]);
+
+        // Assert that the returned length is smaller than the buffer used in the eflash loader
+        assert!(length <= 8192);
+
+        // Read the flash data
+        self.port.read_exact(out_buf)?;
+
+        trace!("Successfully read {} bytes from flash", length);
+
+        Ok(())
+    }
+
+    /// Attempts to have the device calculate the sha256 hash of the flash contents at `addr` up
+    /// until the `addr` + `len` bytes and return it
+    pub fn flash_sha256(&mut self, addr: u32, len: u32) -> Result<[u8; 32], IspError> {
+        let mut cmd = [0u8; 12];
+
+        cmd[0x00] = 0x3d;
+        // …
+        cmd[0x02] = 0x08;
+        // …
+        cmd[0x04..0x08].copy_from_slice(&addr.to_le_bytes());
+        cmd[0x08..0x0c].copy_from_slice(&len.to_le_bytes());
+
+        // Calculate the 8-bit checksum
+        cmd[0x01] = cmd[0x02..0x0c].iter().sum();
+
+        // Write the command to the serial device
+        self.port.write_all(&cmd)?;
+
+        // Assert that the reponse is OK
+        let _ = self.read_reply()?;
+
+        // Read the sha256 data length
+        let mut len_buf = [0u8; 2];
+        self.port.read_exact(&mut len_buf)?;
+        let length = u16::from_le_bytes([len_buf[0], len_buf[1]]);
+
+        assert_eq!(length, 32);
+
+        // Read the sha256 data
+        let mut buf = [0u8; 32];
+        self.port.read_exact(&mut buf)?;
+
+        Ok(buf)
+    }
+
     pub fn check_image(&mut self) -> Result<(), IspError> {
         let mut buf = [0u8; 4];
 
         buf[0] = 0x19;
 
+        trace!("Sending check image command");
+
         self.port.write_all(&buf)?;
-        std::thread::sleep(Duration::from_millis(100));
 
-        let mut res_buf = [0u8; 2];
-        self.port.read_exact(&mut res_buf)?;
+        let _ = self.read_reply()?;
 
-        debug!("check_image: {:?}", res_buf);
+        trace!("Successfully sent check image command");
 
         Ok(())
     }
@@ -223,25 +329,15 @@ impl Bl60xSerialPort {
 
         buf[0] = 0x1a;
 
+        trace!("Sending run image command");
+
         self.port.write_all(&buf)?;
 
-        std::thread::sleep(Duration::from_millis(1));
-        let mut res_buf = [0u8; 2];
-        self.port.read_exact(&mut res_buf)?;
+        let _ = self.read_reply()?;
 
-        debug!("run_image: {:?}", res_buf);
+        trace!("Successfully sent run image command");
 
         Ok(())
-    }
-
-    /// Reads exactly `num_bytes` from the serial port into a heap-allocated `Vec<u8>` and returns
-    /// it when successful, otherwise returns an `io::Error`
-    pub fn read_exact(&mut self, num_bytes: usize) -> Result<Vec<u8>, io::Error> {
-        let mut buf = vec![0u8; num_bytes];
-
-        self.port.read_exact(&mut buf)?;
-
-        Ok(buf)
     }
 
     /// Loads the given segment into RAM on the device
@@ -290,10 +386,10 @@ impl Bl60xSerialPort {
             std::thread::sleep(Duration::from_millis(100));
 
             debug!(
-                "Loading segment {}/{} of {} bytes",
+                "Loading {:4} byte segment [{:02}/{:02}]",
+                chunk.len(),
                 idx + 1,
                 num_chunks,
-                chunk.len()
             );
 
             // Load segment data
@@ -308,9 +404,7 @@ impl Bl60xSerialPort {
             // Write the segment
             buf.extend_from_slice(&chunk);
 
-            println!("{}", idx);
             self.port.write_all(&buf)?;
-
             self.port.read_exact(&mut res_buf)?;
 
             if &res_buf == b"FL" {
@@ -322,13 +416,10 @@ impl Bl60xSerialPort {
                 // Do nothing
                 // debug!("OK");
             } else {
-                debug!("non-fl res_buf: {:?}", res_buf);
-
                 let num_res = u16::from_le_bytes(res_buf);
                 // Read num_res bytes
                 let mut tmp = vec![0u8; num_res as usize];
                 self.port.read_exact(&mut tmp)?;
-                debug!("tmp: {:?}", tmp);
 
                 self.port.read_exact(&mut res_buf)?;
                 // TODO: handle response
@@ -341,6 +432,8 @@ impl Bl60xSerialPort {
 
     /// Requests boot info from the BootROM
     pub fn get_boot_info(&mut self) -> Result<BootInfo, IspError> {
+        trace!("Requesting ROM boot info");
+
         self.send_command(GetBootInfo)?;
 
         let mut buf = [0u8; 24];
@@ -348,6 +441,8 @@ impl Bl60xSerialPort {
 
         let rom_version = u32::from_le_bytes(buf[0x4..0x8].try_into().unwrap());
         let otp_info = buf[0x8..0x18].try_into().unwrap();
+
+        trace!("Received ROM boot info");
 
         Ok(BootInfo {
             rom_version,
@@ -389,7 +484,7 @@ mod tests {
         };
 
         cmd.write_cmd_to_buf(&mut buf).unwrap();
-        assert_eq!(&buf[..4], &[0x11, 0x0, 0xb0, 0x00]);
+        assert_eq!(&buf[..4], &[0x11, 0x00, 0xb0, 0x00]);
         assert_eq!(&buf[4..], &bl::EFLASH_LOADER_NONE_BIN[0..176]);
     }
 }
