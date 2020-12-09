@@ -146,7 +146,9 @@ fn flash_command(
     std::thread::sleep(Duration::from_millis(100));
 
     // Change the baud rate
-    port.set_baud_rate(serial::BaudRate::from_speed(1_000_000))?;
+    port.set_baud_rate(serial::BaudRate::from_speed(
+        global_opts.programming_baud_rate,
+    ))?;
 
     // Put the BootROM into UART mode
     port.enter_uart_mode()?;

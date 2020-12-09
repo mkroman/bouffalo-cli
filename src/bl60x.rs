@@ -432,8 +432,9 @@ impl Bl60xSerialPort {
                 self.port.read_exact(&mut tmp)?;
 
                 self.port.read_exact(&mut res_buf)?;
+
                 // TODO: handle response
-                println!("res_buf {:?}", res_buf);
+                //println!("res_buf {:?}", res_buf);
             }
         }
 

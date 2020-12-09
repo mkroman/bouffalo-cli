@@ -62,7 +62,8 @@ pub struct Opts {
         default_value = "/dev/ttyUSB0"
     )]
     pub serial_port: String,
-    /// The serial baud rate to use for the Boot ROM
+
+    /// The serial baud rate to use when communicating with the Boot ROM
     #[structopt(
         env = "BAUD_RATE",
         short = "b",
@@ -70,4 +71,7 @@ pub struct Opts {
         default_value = "500000"
     )]
     pub baud_rate: usize,
+
+    #[structopt(long = "programming-baud-rate", default_value = "500000")]
+    pub programming_baud_rate: usize,
 }
