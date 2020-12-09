@@ -1,9 +1,13 @@
+use std::convert::TryInto;
 use std::fs::File;
+use std::io::{Cursor, Write};
 use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
 use anyhow::Context;
+use log::{debug, error};
+use sha2::{Digest, Sha256};
 use structopt::StructOpt;
 
 mod bl;
@@ -13,12 +17,20 @@ mod elf_parser;
 mod error;
 
 use bl::Firmware;
+use bl60x::Bl60xSerialPort;
+pub use error::SerialError;
 
-fn get_boot_info(port: &str, baud_rate: usize) -> Result<(), anyhow::Error> {
-    println!("Using serial device {:?}", port);
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Default)]
+pub struct VirtAddr(u32);
+
+fn get_boot_info(global_opts: &cli::Opts) -> Result<(), anyhow::Error> {
+    let serial_port = &global_opts.serial_port;
+    let baud_rate = global_opts.baud_rate;
+
+    println!("Using serial device {:?}", &serial_port);
 
     // Open a serial port to the blx602 device
-    let mut port = bl60x::Bl60xSerialPort::open_with_baud_rate(port, baud_rate)
+    let mut port = bl60x::Bl60xSerialPort::open_with_baud_rate(serial_port, baud_rate)
         .with_context(|| "Could not open serial port")?;
 
     // Put the BootROM into UART mode
@@ -56,6 +68,43 @@ fn get_boot_info(port: &str, baud_rate: usize) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
+///
+fn load_flasher(port: &mut Bl60xSerialPort) -> Result<(), anyhow::Error> {
+    // Put the BootROM into UART mode
+    port.enter_uart_mode()?;
+
+    // Wait for 20ms
+    thread::sleep(Duration::from_millis(20));
+
+    // Parse the eflash_loader firmware
+    let fw = Firmware::from_reader(Cursor::new(&bl::EFLASH_LOADER_40M_BIN))?;
+
+    // Write the boot header into our buffer
+    let mut buf: Vec<u8> = Vec::with_capacity(4096);
+    fw.write_to(&mut buf)?;
+
+    // Send the boot header
+    match port.load_boot_header(buf.try_into().unwrap()) {
+        Ok(_) => {}
+        Err(err) => {
+            error!(
+                "Error when trying to read response from load boot header: {}",
+                err
+            );
+        }
+    };
+
+    // Load the firmware segments
+    for segment in fw.segments {
+        port.load_segment(&segment)?;
+    }
+
+    port.check_image()?;
+    port.run_image()?;
+
+    Ok(())
+}
+
 fn elf2image<P: AsRef<Path>>(input_path: P) -> Result<(), anyhow::Error> {
     let file = File::open(&input_path)?;
     let parser = elf_parser::ElfParser::parse(file).with_context(|| {
@@ -76,6 +125,90 @@ fn elf2image<P: AsRef<Path>>(input_path: P) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
+fn flash_command(
+    command: &cli::FlashCommand,
+    global_opts: &cli::Opts,
+) -> Result<(), anyhow::Error> {
+    use cli::FlashCommand;
+
+    println!("Using serial device {:?}", &global_opts.serial_port);
+
+    // Open the serial port
+    let mut port = bl60x::Bl60xSerialPort::open_with_baud_rate(
+        &global_opts.serial_port,
+        global_opts.baud_rate,
+    )?;
+
+    // Load fhe eflash firmware into RAM and run it
+    load_flasher(&mut port)?;
+
+    // Wait for 100 ms
+    std::thread::sleep(Duration::from_millis(100));
+
+    // Change the baud rate
+    port.set_baud_rate(serial::BaudRate::from_speed(1_000_000))?;
+
+    // Put the BootROM into UART mode
+    port.enter_uart_mode()?;
+
+    // Wait for 20ms
+    thread::sleep(Duration::from_millis(20));
+
+    match command {
+        FlashCommand::Read {
+            address,
+            size,
+            filename,
+            ..
+        } => {
+            println!(
+                "Reading {} bytes from flash at {:#010x} and writing it to file {}",
+                size,
+                address,
+                filename.display()
+            );
+
+            const BUF_READ_SIZE: usize = 8192;
+
+            let mut buf = vec![0u8; BUF_READ_SIZE];
+            let mut file = File::create(filename)?;
+            let mut hasher = Sha256::new();
+
+            let rem = *size as usize % BUF_READ_SIZE;
+            let div = *size as usize / BUF_READ_SIZE;
+            let div = if rem > 0 { div + 1 } else { div };
+            let mut remaining = *size as usize;
+
+            for n in 0..div {
+                let s = std::cmp::min(remaining, BUF_READ_SIZE);
+                let start = n * BUF_READ_SIZE;
+                let mut b = &mut buf[0..s];
+
+                port.read_flash_exact(start as u32, &mut b)?;
+
+                hasher.update(&b);
+                file.write_all(&b)?;
+                remaining -= s;
+            }
+
+            // Have the device calculate the sha256 hash for the flash regions we requested
+            let flash_hash = port.flash_sha256(*address, *size)?;
+            // Calculate the final sha256 hash for the data we just read
+            let read_hash = hasher.finalize();
+
+            // Compare and ensure that the data we just read matches what's on the flash
+            if flash_hash[..] != read_hash[..] {
+                error!("SHA256 hash mismatch between the flash data and the data we just read");
+            } else {
+                debug!("SHA256 hash between flash and the data we just read matches");
+            }
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
 fn main() -> Result<(), anyhow::Error> {
     use cli::{Command, Elf2ImageOpts};
 
@@ -86,17 +219,8 @@ fn main() -> Result<(), anyhow::Error> {
     let opts = cli::Opts::from_args();
 
     match &opts.command {
-        Command::Info => {
-            let serial_port = opts.serial_port;
-            let baud_rate = opts.baud_rate;
-
-            get_boot_info(&serial_port, baud_rate)?;
-        }
-        Command::Flash(_) => {
-            eprintln!("Flashing is not yet implemented");
-
-            unimplemented!();
-        }
+        Command::Info => get_boot_info(&opts)?,
+        Command::Flash(ref cmd) => flash_command(cmd, &opts)?,
         Command::Elf2Image(Elf2ImageOpts { filename }) => {
             println!(
                 "Converting elf image {} to firmware",
