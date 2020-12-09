@@ -1,0 +1,95 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  test-and-clippy:
+    runs-on: ubuntu-latest
+    steps:
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - uses: actions/checkout@v2
+
+      - name: Run tests
+        run: cargo test --verbose
+
+      - name: Run clippy
+        run: cargo clippy
+
+  # Cross-compilation builds for other targets, using `cross`, from linux
+  linux-cross-build:
+    runs-on: ubuntu-latest
+    needs:
+      - test-and-clippy
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-unknown-linux-musl
+          - arm-unknown-linux-musleabi
+          - i686-unknown-linux-musl
+          - x86_64-pc-windows-gnu
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Install cross
+        run: cargo install cross
+
+      - name: Build for ${{ matrix.target }}
+        run: scripts/cross-build.sh ${{ matrix.target }}
+
+      - name: Upload ${{ matrix.target }} artifacts
+        uses: actions/upload-artifact@v2
+        with:
+          name: release-${{ matrix.target }}
+          path: release-dist/*
+
+      - name: Upload github release executable
+        run: |
+          export PATH=$PATH:$(go env GOPATH)/bin
+          go get github.com/tcnksm/ghr
+          version=$(git describe --tags | tr -d '\n')
+          ghr "${version}" release-dist/bouffalo-cli-*.gz
+
+  macos-build:
+    runs-on: macos-latest
+    needs:
+      - test-and-clippy
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Build release
+        run: cargo build --verbose --release
+
+      - name: Prepare artifacts
+        run: |
+          mkdir -p target/dist
+          version=$(git describe --tags | tr -d '\n')
+          bin="target/dist/bouffalo-cli-${version}-x86_64-apple-darwin"
+          cp target/release/bouffalo-cli "${bin}"
+          gzip "${bin}"
+          export PATH=$PATH:$(go env GOPATH)/bin
+          go get github.com/tcnksm/ghr
+          ghr "${version}" target/dist/*.gz
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v2
+        with:
+          name: release-x86_64-apple-darwin
+          path: target/dist/*
