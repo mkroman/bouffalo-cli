@@ -5,24 +5,24 @@ use std::time::Duration;
 
 use log::{debug, trace, warn};
 use num_enum::FromPrimitive;
-use serial::{BaudRate, SerialPort, SystemPort};
+use serialport::prelude::*;
 use thiserror::Error;
 
 use crate::bl::bootrom;
 pub use crate::error::SerialError;
 
 /// The serial settings expected by the BootROM on the bl602
-pub const BL602_BOOTROM_SERIAL_SETTINGS: serial::PortSettings = serial::PortSettings {
-    baud_rate: serial::BaudOther(500_000),
-    char_size: serial::Bits8,
-    parity: serial::ParityNone,
-    stop_bits: serial::Stop1,
-    flow_control: serial::FlowNone,
+pub const BL602_BOOTROM_SERIAL_SETTINGS: SerialPortSettings = SerialPortSettings {
+    baud_rate: 500_000,
+    data_bits: DataBits::Eight,
+    flow_control: FlowControl::None,
+    parity: Parity::None,
+    stop_bits: StopBits::One,
+    timeout: Duration::from_secs(2),
 };
 
 pub struct Bl60xSerialPort {
-    port: SystemPort,
-    baud_rate: BaudRate,
+    port: Box<dyn SerialPort>,
 }
 
 pub trait SerialWritableCommand {
@@ -96,43 +96,34 @@ impl Bl60xSerialPort {
     ) -> Result<Bl60xSerialPort, SerialError> {
         debug!("Opening serial port {:?}", port.as_ref());
 
-        let mut port = serial::open(port).map_err(|err| {
-            SerialError::OpenError(port.as_ref().to_string_lossy().into_owned(), err)
-        })?;
         let mut settings = BL602_BOOTROM_SERIAL_SETTINGS;
         let timeout = Duration::from_millis(2000);
 
-        settings.baud_rate = serial::BaudRate::from_speed(baud_rate);
+        settings.baud_rate = baud_rate as u32;
 
-        debug!("Setting baud rate to {}", settings.baud_rate.speed());
-        port.configure(&settings)
-            .map_err(|err| SerialError::BaudError(settings.baud_rate.speed(), err))?;
+        debug!("Setting baud rate to {}", settings.baud_rate);
         debug!("Setting timeout to {:?}", timeout);
-        port.set_timeout(timeout)
-            .map_err(|err| SerialError::TimeoutError(timeout.as_secs(), err))?;
 
-        Ok(Bl60xSerialPort {
-            port,
-            baud_rate: settings.baud_rate,
-        })
+        let port = serialport::open_with_settings(port, &settings).map_err(|err| {
+            SerialError::OpenError(port.as_ref().to_string_lossy().into_owned(), err)
+        })?;
+        // let mut port = serialport::open(port).map_err(|err| {
+        //     SerialError::OpenError(port.as_ref().to_string_lossy().into_owned(), err)
+        // })?;
+
+        Ok(Bl60xSerialPort { port })
     }
 
-    pub fn set_baud_rate(&mut self, baud_rate: serial::BaudRate) -> Result<(), serial::Error> {
-        debug!("Setting serial port baud rate to {}", &baud_rate.speed());
+    pub fn set_baud_rate(&mut self, baud_rate: u32) -> Result<(), serialport::Error> {
+        debug!("Setting serial port baud rate to {}", baud_rate);
 
-        self.port.reconfigure(&|settings| {
-            settings.set_baud_rate(baud_rate)?;
-
-            Ok(())
-        })?;
-
-        self.baud_rate = baud_rate;
+        self.port.set_baud_rate(baud_rate)?;
 
         Ok(())
     }
 
     /// Sets the timeout of the serial port
-    pub fn set_timeout(&mut self, timeout: Duration) -> Result<(), serial::Error> {
+    pub fn set_timeout(&mut self, timeout: Duration) -> Result<(), serialport::Error> {
         debug!("Setting serial timeout to {}", timeout.as_secs());
 
         self.port.set_timeout(timeout)
@@ -148,12 +139,18 @@ impl Bl60xSerialPort {
 
         // Calculate the number of bytes to send in order to to keep the UART busy for 5ms
         // bauds * 3s / (8 data bits + 1 start bit + 1 stop bit) / 1000 ms
-        let num_bytes = self.baud_rate.speed().saturating_mul(3) / 10 / 1000;
+        let num_bytes = self
+            .port
+            .baud_rate()
+            .expect("Could not get baud rate for serial port")
+            .saturating_mul(3)
+            / 10
+            / 1000;
 
         trace!("Trying to put device in UART mode");
         trace!("Sending {} x 0x55 bytes", num_bytes);
 
-        self.port.write_all(&vec![0x55u8; num_bytes])?;
+        self.port.write_all(&vec![0x55u8; num_bytes as usize])?;
         self.port.read_exact(&mut buf)?;
 
         if &buf != b"OK" {
