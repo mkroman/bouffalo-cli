@@ -29,7 +29,7 @@ pub enum Error {
     CommandIdError = 0x0101,
     #[error("There was an issue with the length of the command or its parameters")]
     CommandLengthError,
-    #[error("There was a CRC checksum error with the command")]
+    #[error("There was a CRC checksum error within the command")]
     CommandCrcError,
     #[error("There was a problem with the sequence of commands - this usually means that the command was unexpected in this order")]
     CommandSeqError,

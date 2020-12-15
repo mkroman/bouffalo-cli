@@ -1,6 +1,6 @@
 use std::convert::TryInto;
 use std::fs::File;
-use std::io::{Cursor, Write};
+use std::io::{BufReader, Cursor, Read, Write};
 use std::path::Path;
 use std::thread;
 use std::time::Duration;
@@ -170,20 +170,20 @@ fn flash_command(
                 filename.display()
             );
 
-            const BUF_READ_SIZE: usize = 8192;
+            const READ_SIZE: usize = 8192;
 
-            let mut buf = vec![0u8; BUF_READ_SIZE];
+            let mut buf = vec![0u8; READ_SIZE];
             let mut file = File::create(filename)?;
             let mut hasher = Sha256::new();
 
-            let rem = *size as usize % BUF_READ_SIZE;
-            let div = *size as usize / BUF_READ_SIZE;
+            let rem = *size as usize % READ_SIZE;
+            let div = *size as usize / READ_SIZE;
             let div = if rem > 0 { div + 1 } else { div };
             let mut remaining = *size as usize;
 
             for n in 0..div {
-                let s = std::cmp::min(remaining, BUF_READ_SIZE);
-                let start = n * BUF_READ_SIZE;
+                let s = std::cmp::min(remaining, READ_SIZE);
+                let start = n * READ_SIZE;
                 let mut b = &mut buf[0..s];
 
                 port.read_flash_exact(start as u32, &mut b)?;
@@ -205,6 +205,41 @@ fn flash_command(
                 debug!("SHA256 hash between flash and the data we just read matches");
             }
         }
+        FlashCommand::Write {
+            filename,
+            address,
+            size,
+        } => {
+            let file = File::open(filename)
+                .with_context(|| "Could not open the file we wanted to write to flash")?;
+            let file_size = file
+                .metadata()
+                .with_context(|| {
+                    "Could not read metadata for the file we wanted to write to flash"
+                })?
+                .len();
+            let size = size.unwrap_or_else(|| file_size.try_into().unwrap());
+
+            assert!(size as u64 <= file_size);
+
+            println!(
+                "Writing {} bytes to flash at {:#010x} from the file {}",
+                size,
+                address,
+                filename.display()
+            );
+
+            // Read the contents of the file into memory
+            let mut buf = vec![0u8; size as usize];
+            let mut reader = BufReader::new(file);
+
+            reader.read_exact(&mut buf)?;
+
+            port.set_timeout(Duration::from_secs(60))?;
+            port.write_flash(*address, &buf)?;
+            port.set_timeout(Duration::from_secs(2))?;
+        }
+
         _ => {}
     }
 

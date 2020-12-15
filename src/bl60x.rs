@@ -131,6 +131,13 @@ impl Bl60xSerialPort {
         Ok(())
     }
 
+    /// Sets the timeout of the serial port
+    pub fn set_timeout(&mut self, timeout: Duration) -> Result<(), serial::Error> {
+        debug!("Setting serial timeout to {}", timeout.as_secs());
+
+        self.port.set_timeout(timeout)
+    }
+
     /// Makes the BootROM enter UART mode, returns `()` on success, `IspError` otherwise
     ///
     /// Note:
@@ -259,7 +266,9 @@ impl Bl60xSerialPort {
         buf[0x08..0x0c].copy_from_slice(&(out_buf.len() as u32).to_le_bytes());
 
         // Calculate the 8-bit checksum
-        buf[0x01] = buf[0x02..0x0c].iter().sum();
+        buf[0x01] = buf[0x02..0x0c]
+            .iter()
+            .fold(0u8, |acc, &x| acc.wrapping_add(x));
 
         // Write the command to the serial device
         self.port.write_all(&buf)?;
@@ -279,6 +288,89 @@ impl Bl60xSerialPort {
         self.port.read_exact(out_buf)?;
 
         trace!("Successfully read {} bytes from flash", length);
+
+        Ok(())
+    }
+
+    /// Erases the flash at the given `address` and the following `size` bytes
+    pub fn erase_flash(&mut self, addr: u32, size: usize) -> Result<(), IspError> {
+        let mut cmd = [0u8; 12];
+
+        // Write the command id
+        cmd[0x00] = 0x30;
+        // Write the length of the command
+        cmd[0x02] = 0x08;
+        // Write the start address we want to erase from
+        cmd[0x04..0x08].copy_from_slice(&addr.to_le_bytes());
+        // Write the end address we want to erase to
+        cmd[0x08..0x0c].copy_from_slice(&(addr + size as u32).to_le_bytes());
+
+        // Calculate and write the checksum for the command data
+        cmd[0x01] = cmd[0x02..0x0c]
+            .iter()
+            .fold(0u8, |acc, &x| acc.wrapping_add(x));
+
+        trace!(
+            "Erasing flash regions 0x{:08x}..0x{:08x}",
+            addr,
+            addr as usize + size
+        );
+
+        self.port.write_all(&cmd)?;
+        self.read_reply()?;
+
+        trace!("Flash regions successfully erased");
+
+        Ok(())
+    }
+
+    /// Writes the given `data` to the flash at offset `addr`, starting from 0
+    pub fn write_flash(&mut self, addr: u32, data: &[u8]) -> Result<(), IspError> {
+        const WRITE_SIZE: usize = 8192;
+        let mut cmd = [0u8; 8];
+
+        // Erase the flash we want to write to, to ensure that it's all zeros
+        self.erase_flash(addr, data.len())?;
+
+        let mut remaining = data.len();
+        let mut start = addr;
+        let n = remaining / WRITE_SIZE;
+        let n = if remaining % WRITE_SIZE > 0 { n + 1 } else { n };
+
+        for i in 0..n {
+            let num_bytes = std::cmp::min(remaining, WRITE_SIZE);
+
+            // Write the command id
+            cmd[0x00] = 0x31;
+            // Write the length of the payload
+            cmd[0x02..0x04].copy_from_slice(&((num_bytes as u16) + 4).to_le_bytes());
+            // Write the start address
+            cmd[0x04..0x08].copy_from_slice(&start.to_le_bytes());
+
+            let off = i * WRITE_SIZE;
+            let payload = &data[off..off + num_bytes];
+
+            // Calculate and write the checksum
+            let chksum = cmd[0x02..0x08]
+                .iter()
+                .fold(0u8, |acc, &x| acc.wrapping_add(x));
+
+            let chksum = payload.iter().fold(chksum, |acc, &x| acc.wrapping_add(x));
+
+            cmd[0x01] = chksum;
+
+            trace!("Writing {} bytes to flash @ 0x{:08x}", num_bytes, start);
+
+            self.port.write_all(&cmd)?;
+            self.port.write_all(&payload)?;
+
+            self.read_reply()?;
+
+            trace!("Successfully wrote {} bytes", num_bytes);
+
+            start += num_bytes as u32;
+            remaining -= num_bytes;
+        }
 
         Ok(())
     }
@@ -326,8 +418,7 @@ impl Bl60xSerialPort {
         trace!("Sending check image command");
 
         self.port.write_all(&buf)?;
-
-        let _ = self.read_reply()?;
+        self.read_reply()?;
 
         trace!("Successfully sent check image command");
 

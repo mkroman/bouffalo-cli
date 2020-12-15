@@ -42,8 +42,7 @@ pub enum FlashCommand {
         #[structopt(required = true)]
         address: u32,
         /// Size of the region to write
-        #[structopt(required = true)]
-        size: u32,
+        size: Option<u32>,
     },
     /// Erase flash contents
     Erase,
