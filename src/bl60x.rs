@@ -107,9 +107,6 @@ impl Bl60xSerialPort {
         let port = serialport::open_with_settings(port, &settings).map_err(|err| {
             SerialError::OpenError(port.as_ref().to_string_lossy().into_owned(), err)
         })?;
-        // let mut port = serialport::open(port).map_err(|err| {
-        //     SerialError::OpenError(port.as_ref().to_string_lossy().into_owned(), err)
-        // })?;
 
         Ok(Bl60xSerialPort { port })
     }
@@ -187,9 +184,6 @@ impl Bl60xSerialPort {
 
         Ok(u16::from_le_bytes([buf[0], buf[1]]))
     }
-
-    /// Attempts to read data from external flash at `address` and `size` bytes forward
-    //pub fn read_flash(&mut self, addr: usize, size: usize) -> Result<(), IspError> {}
 
     /// Sends the given buf as a boot header and attempts to load it
     pub fn load_boot_header(&mut self, boot_header: [u8; 176]) -> Result<(), IspError> {
