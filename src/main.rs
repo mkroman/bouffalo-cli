@@ -5,7 +5,7 @@ use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use log::{debug, error};
 use sha2::{Digest, Sha256};
 use structopt::StructOpt;
@@ -239,8 +239,19 @@ fn flash_command(
             port.write_flash(*address, &buf)?;
             port.set_timeout(Duration::from_secs(2))?;
         }
+        FlashCommand::Erase { offset, size } => {
+            if size % 4096 > 0 {
+                return Err(anyhow!("The erase size must be a multiple of 4096, since data is erased in entire sections"));
+            }
 
-        _ => {}
+            println!("Erasing {} bytes from flash at 0x{:08x}", size, offset);
+
+            // Increase the timeout duration since this can take a while
+            port.set_timeout(Duration::from_secs(60))?;
+            port.erase_flash(*offset, *size)?;
+            // Restore the timeout duration
+            port.set_timeout(Duration::from_secs(2))?;
+        }
     }
 
     Ok(())

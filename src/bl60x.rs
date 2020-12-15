@@ -293,17 +293,20 @@ impl Bl60xSerialPort {
     }
 
     /// Erases the flash at the given `address` and the following `size` bytes
-    pub fn erase_flash(&mut self, addr: u32, size: usize) -> Result<(), IspError> {
+    pub fn erase_flash(&mut self, addr: u32, size: u32) -> Result<(), IspError> {
         let mut cmd = [0u8; 12];
+
+        let start = addr;
+        let end = start + size;
 
         // Write the command id
         cmd[0x00] = 0x30;
         // Write the length of the command
         cmd[0x02] = 0x08;
         // Write the start address we want to erase from
-        cmd[0x04..0x08].copy_from_slice(&addr.to_le_bytes());
+        cmd[0x04..0x08].copy_from_slice(&start.to_le_bytes());
         // Write the end address we want to erase to
-        cmd[0x08..0x0c].copy_from_slice(&(addr + size as u32).to_le_bytes());
+        cmd[0x08..0x0c].copy_from_slice(&end.to_le_bytes());
 
         // Calculate and write the checksum for the command data
         cmd[0x01] = cmd[0x02..0x0c]
@@ -313,7 +316,7 @@ impl Bl60xSerialPort {
         trace!(
             "Erasing flash regions 0x{:08x}..0x{:08x}",
             addr,
-            addr as usize + size
+            addr + size
         );
 
         self.port.write_all(&cmd)?;
@@ -330,7 +333,7 @@ impl Bl60xSerialPort {
         let mut cmd = [0u8; 8];
 
         // Erase the flash we want to write to, to ensure that it's all zeros
-        self.erase_flash(addr, data.len())?;
+        self.erase_flash(addr, data.len().try_into().unwrap())?;
 
         let mut remaining = data.len();
         let mut start = addr;

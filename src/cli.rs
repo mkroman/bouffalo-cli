@@ -45,7 +45,14 @@ pub enum FlashCommand {
         size: Option<u32>,
     },
     /// Erase flash contents
-    Erase,
+    Erase {
+        /// The offset in flash to start erasing from, starting from 0
+        #[structopt(required = true)]
+        offset: u32,
+        /// The number of bytes to erase
+        #[structopt(required = true)]
+        size: u32,
+    },
 }
 
 #[derive(StructOpt, Debug)]
