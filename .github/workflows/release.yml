@@ -13,6 +13,9 @@ jobs:
       # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
       - uses: actions/checkout@v2
 
+      - name: Install libuv-dev
+        run: sudo apt update && sudo apt install -y libuv1-dev
+
       - name: Run tests
         run: cargo test --verbose
 
