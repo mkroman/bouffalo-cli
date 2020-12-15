@@ -3,6 +3,11 @@ name: CI
 on:
   pull_request:
   push:
+    branches:
+      - main
+      - github-actions
+    tags-ignore:
+      - '*'
   workflow_dispatch:
 
 jobs:
