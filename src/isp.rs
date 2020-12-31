@@ -1,8 +1,14 @@
+use std::cell::RefCell;
 use std::io::{Cursor, Read, Write};
+use std::ops::DerefMut;
+use std::time::{Duration, Instant};
 
 use byteorder::{LittleEndian, ReadBytesExt};
 
 use crate::{Error, VirtAddr};
+
+/// The amount of time of inactivity until the bootloader resets.
+const BOOTLOADER_TIMEOUT: Duration = Duration::from_millis(2000);
 
 /// A trait marker to mark a type as a programming protocol.
 pub trait Protocol {}
@@ -37,8 +43,7 @@ where
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Default)]
-/// Status response that indicates whether the recently sent command was successful ('OK') or there
-/// was an error ('FL') followed by an error code.
+/// Status response that indicates whether the recently sent ISP command was successful.
 pub struct Status;
 
 impl Response<Rom> for Status {
@@ -260,6 +265,70 @@ pub fn crc32(bytes: &[u8]) -> u32 {
 
     !crc
 }
+
+/// This is a type that takes ownership of a `SerialPort` once the end-device has entered its
+/// masked ROM bootloader.
+///
+/// Every function that sends a command to the bootloader will return a Result.
+///
+/// If we try to send a command after more than 2000ms of inactivity, the function will fail
+/// immediately and return an Err with the ownership of the inner `SerialPort`.
+/// It is up to the user to handle this and take back ownership.
+pub struct Bootloader {
+    /// The time since we last interacted with the bootloader
+    ///
+    /// This is used to determine whether the bootloader has reset since our last command, in which
+    /// case we'll have to return an error
+    pub last_interaction: Instant,
+    /// The serial port connected to the device
+    pub port: RefCell<crate::SerialPort>,
+}
+
+impl Bootloader {
+    pub fn get_boot_info(&mut self) -> Result<BootInfo, Error> {
+        self.send_and_receive::<_, BootInfo>(GetBootInfo)
+    }
+
+    /// Reads the response type `T` from the bootloader.
+    pub fn read_response<T: Response<Rom>>(&mut self) -> Result<T::T, Error> {
+        let mut port = self.port.borrow_mut();
+        let response = T::from_reader(port.deref_mut().deref_mut());
+
+        self.last_interaction = Instant::now();
+
+        response
+    }
+
+    /// Sends the given command `cmd` and then tries to read the response `R` from the bootloader,
+    /// returning `R::T` on success, or`Err` otherwise.
+    pub fn send_and_receive<C: Command<Rom>, R: Response<Rom>>(
+        &mut self,
+        cmd: C,
+    ) -> Result<R::T, Error> {
+        self.send_command(cmd)?;
+        self.read_response::<R>()
+    }
+
+    /// Sends the given `command` to the bootloader.
+    pub fn send_command<'a, T: Command<Rom>>(&mut self, cmd: T) -> Result<(), Error> {
+        if self.last_interaction.elapsed() > BOOTLOADER_TIMEOUT {
+            return Err(Error::BootloaderReset {
+                port: self.port.into_inner(),
+            });
+        }
+
+        let mut port = self.port.borrow_mut();
+
+        let mut buf = Vec::new();
+        cmd.to_writer(&mut buf)?;
+
+        self.last_interaction = Instant::now();
+        port.write_all(&buf)?;
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::convert::TryInto;
